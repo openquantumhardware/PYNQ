@@ -20,6 +20,8 @@ RUN dpkg --add-architecture i386 \
  # Add toolchain PPA
  && add-apt-repository -y ppa:ubuntu-toolchain-r/ppa \
  && apt-get update \
+ # Configures timezone interactively (2: Americas, 37: Central)
+ && echo -e '2\n37\n' | apt-get install -y tzdata \
  # Install build and host packages
  && apt-get install -y \
     bc libtool-bin gperf bison flex texi2html texinfo help2man gawk libtool \
@@ -30,9 +32,7 @@ RUN dpkg --add-architecture i386 \
     rsync python3-pip gcc-multilib xterm net-tools ninja-build python3-testresources \
     libncurses5-dev libncursesw5-dev vim nano tmux zip dnsutils sudo binfmt-support \
     dbus-x11 libswt-glx-gtk-4-jni libgtk2.0-0 xvfb \
-    python-is-python3 pylint kconfig-frontends-nox zstd lz4 \
- # Configures timezone interactively (2: Americas, 37: Central)
- && echo -e '2\n37\n' | apt-get install -y lsb-core \
+    lsb-core python-is-python3 pylint kconfig-frontends-nox zstd lz4 \
  # Locale for Vivado
  && locale-gen en_US.utf8 && update-locale \
  # Clean up APT
