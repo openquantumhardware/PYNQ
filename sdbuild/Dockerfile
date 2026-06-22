@@ -32,7 +32,7 @@ RUN dpkg --add-architecture i386 \
     rsync python3-pip gcc-multilib xterm net-tools ninja-build python3-testresources \
     libncurses5-dev libncursesw5-dev vim nano tmux zip dnsutils sudo binfmt-support \
     dbus-x11 libswt-glx-gtk-4-jni libgtk2.0-0 xvfb \
-    lsb-core diffstat python-is-python3 pylint kconfig-frontends-nox zstd lz4 \
+    lsb-core diffstat python-is-python3 pylint python3-yaml kconfig-frontends-nox zstd lz4 \
  # Locale for Vivado
  && locale-gen en_US.utf8 && update-locale \
  # Clean up APT
