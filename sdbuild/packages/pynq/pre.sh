@@ -74,7 +74,11 @@ if [ -n "$REBUILD_PYNQ_SDIST" ]; then
 
     # build bitstream, microblazes' bsps and binaries
     cd $BUILD_ROOT/PYNQ
-    make -f build.mk
+    if [ -n "$BUILD_LIGHT_SDIST" ]; then
+        make -f build.mk light
+    else
+        make -f build.mk
+    fi
     sudo cp dist/*.tar.gz $target/home/xilinx/pynq_git/dist
 else
     # using prebuilt sdist with non-external board

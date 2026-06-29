@@ -19,6 +19,9 @@ BASE_BSP := pynq/lib/rpi/bsp_iop_rpi/lscript.ld
 all: gitsubmodule $(BITS) $(BASE_BSP) $(LOGICTOOLS_BSP) $(SDIST)
 	echo "Build completed: $(SDIST)"
 
+light: gitsubmodule $(SDIST)
+	echo "Light build completed: $(SDIST)"
+
 gitsubmodule:
 	git submodule update
 
