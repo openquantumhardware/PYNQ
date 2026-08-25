@@ -102,9 +102,13 @@ if {$result != 0} {
     puts "       golden boot PDI and would not load correctly at runtime."
     puts "       $msg"
     puts ""
-    puts "       A 'SegConfig-Validation' error naming an NSU means the PS-to-PL"
-    puts "       aperture differs between this overlay and the golden. See the"
-    puts "       aperture-contract comment at the top of ../golden/golden_ref.tcl."
+    puts "       Common causes, by the validation number in the message:"
+    puts "        -12  an NSU aperture differs between overlay and golden."
+    puts "        -18  the overlay uses an IO site the golden does not. In"
+    puts "             segmented configuration an overlay may not add IO that"
+    puts "             belongs to the boot partition. On VRK160 this is what"
+    puts "             happens with gpio_pb: its pins share bank silicon with"
+    puts "             the LPDDR5 interface, which the golden owns."
     exit 1
 }
 puts "pr_verify PASSED -- overlay is compatible with golden reference"

@@ -9,9 +9,12 @@ set design_name "base"
 source [file join [file dirname [info script]] ../golden/golden_ref.tcl]
 
 # Step 2: Remove PL tie-offs from the golden reference
-delete_bd_objs [get_bd_cells pl_tieoff_m00axi]
+delete_bd_objs [get_bd_cells pl_tieoff_m00axi]   ;# el tie-off de FPD_AXI_PL
 delete_bd_objs [get_bd_cells pl_tieoff_dma0]
 delete_bd_objs [get_bd_cells pl_tieoff_dma1]
+# axi_gpio_pb itself comes from the golden (it claims the LPDDR5-bank IOB
+# sites so pr_verify accepts this overlay); only its stand-in master goes.
+delete_bd_objs [get_bd_cells pl_tieoff_pb]
 # Disconnect all IRQ nets before deleting the tie-off, otherwise the
 # sink pins remain connected and cannot be re-driven.
 foreach irq_pin [get_bd_pins ps_wizard_0/pl_ps_irq*] {
@@ -20,32 +23,15 @@ foreach irq_pin [get_bd_pins ps_wizard_0/pl_ps_irq*] {
 }
 delete_bd_objs [get_bd_cells pl_tieoff_irq]
 
-# Step 3: PL Peripherals -- Control Path (axi_noc_ps/M00_AXI via SmartConnect)
-# axi_noc_ps/M00_AXI is the PS-to-PL control-path master on Gen 2 (see
-# golden_ref.tcl's header comment) -- there's no separate M_AXI_FPD pin to
-# fan out here like there was on the Gen 1 (VCK190) version of this file.
+# Step 3: PL Peripherals -- Control Path (ps_wizard_0/FPD_AXI_PL)
+# Gen 2 has no M_AXI_FPD pin; the direct PS-to-PL master is FPD_AXI_PL,
+# enabled by PS_USE_FPD_AXI_PL in golden_ref.tcl. It bypasses the NoC, so
+# peripherals sit at conventional 0xA400_0000 addresses and no NoC aperture
+# has to be kept in sync with the golden.
 
-# SmartConnect: fan-out axi_noc_ps/M00_AXI to 6 PL slaves + the aperture anchor
+# SmartConnect: fan-out ps_wizard_0/FPD_AXI_PL to the 6 PL slaves
 set axi_smc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc]
-set_property -dict [list CONFIG.NUM_MI {7} CONFIG.NUM_SI {1}] $axi_smc
-
-# Aperture anchor.
-#
-# golden_ref.tcl reserves a fixed PS-to-PL window that every overlay must fill
-# *exactly* -- the NoC NSU records the span of the assigned segments, and it
-# has to match the golden byte-for-byte or pr_verify rejects the overlay.
-# The window is sized for the largest overlay (see golden_ref.tcl), so this
-# small design would otherwise fall well short of it.
-#
-# This dummy slave sits at the very top of the window so the span comes out
-# right. Nothing addresses it at runtime; it exists purely to pin the span.
-# Any overlay whose real peripherals do not reach the top of the window needs
-# one -- copy this block and the matching pl_segments entry.
-set pl_aperture_anchor [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_vip:1.1 pl_aperture_anchor]
-set_property -dict [list \
-    CONFIG.INTERFACE_MODE {SLAVE} \
-    CONFIG.PROTOCOL {AXI4} \
-] $pl_aperture_anchor
+set_property -dict [list CONFIG.NUM_MI {6} CONFIG.NUM_SI {1}] $axi_smc
 
 # GPIO: LEDs (4-bit, output)
 set axi_gpio_led [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_led]
@@ -55,13 +41,10 @@ set_property -dict [list \
     CONFIG.USE_BOARD_FLOW {true} \
 ] $axi_gpio_led
 
-# GPIO: Push buttons (width set by board interface, input, interrupts enabled)
-set axi_gpio_pb [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_pb]
- set_property -dict [list \
-    CONFIG.C_INTERRUPT_PRESENT {1} \
-    CONFIG.GPIO_BOARD_INTERFACE {gpio_pb} \
-    CONFIG.USE_BOARD_FLOW {true} \
-] $axi_gpio_pb
+# GPIO: Push buttons -- the cell, its GPIO port and its pin constraints all
+# come from golden_ref.tcl, because gpio_pb_0/1 (BD37/BG35, LVSTL05_10) share
+# I/O bank silicon with LPDDR5 and therefore belong to the boot partition.
+# Here we only give it a real AXI master and an interrupt.
 
 # GPIO: DIP switches (4-bit, input, interrupts enabled)
 set axi_gpio_dip_sw [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_dip_sw]
@@ -77,10 +60,9 @@ set axi_bram_ctrl_0_bram [create_bd_cell -type ip -vlnv xilinx.com:ip:emb_mem_ge
 set_property CONFIG.MEMORY_TYPE {True_Dual_Port_RAM} $axi_bram_ctrl_0_bram
 
 # DMA: AXI DMA engine with MM2S and S2MM (simple mode, no scatter-gather)
-# c_addr_width 64: golden_ref.tcl only maps the low 2GB LPDDR5 aperture
-# today, but a wide address width costs nothing and avoids silently
-# truncating addresses if a higher aperture is added later (see
-# golden_ref.tcl's header comment on LPDDR5 addressing).
+# c_addr_width 64 is required, not optional: DDR_CH0_MED sits at
+# 0x8_0000_0000, above the 32-bit boundary. A 32-bit address width would
+# silently truncate and hit the wrong memory.
 set axi_dma_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 axi_dma_0]
  set_property -dict [list \
     CONFIG.c_include_sg {0} \
@@ -107,17 +89,16 @@ set axis_data_fifo_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo
 
 set axi_uartlite_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_uartlite:2.0 axi_uartlite_0]
  set_property -dict [list \
- CONFIG.C_S_AXI_ACLK_FREQ_HZ {333329987} \
+ CONFIG.C_S_AXI_ACLK_FREQ_HZ {100000000} \
  CONFIG.UARTLITE_BOARD_INTERFACE {pl_uart_bank713} \
  CONFIG.USE_BOARD_FLOW {true} \
  ] $axi_uartlite_0
-# C_S_AXI_ACLK_FREQ_HZ carried over from the VCK190 pl0_ref_clk (333.33MHz)
-# unverified for VRK160/ps_wizard -- wrong value skews the UART baud rate,
-# confirm the actual pl0_ref_clk frequency in Vivado.
+# 100 MHz matches PMC_CRP_PL0_REF_CTRL_FREQMHZ in golden_ref.tcl, which is
+# the value AMD's own VRK160 designs use. The VCK190 port had 333.33 MHz
+# here, which would have skewed the baud rate.
 
 # Step 4: External board interfaces (GPIO, UART)
 create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 gpio_led
-create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 gpio_pb
 create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 gpio_dp
 create_bd_intf_port -mode Master -vlnv xilinx.com:interface:uart_rtl:1.0 pl_uart_bank713
 
@@ -129,21 +110,19 @@ connect_bd_intf_net [get_bd_intf_pins axi_bram_ctrl_0/BRAM_PORTB] [get_bd_intf_p
 
 # GPIO board connections
 connect_bd_intf_net [get_bd_intf_ports gpio_led] [get_bd_intf_pins axi_gpio_led/GPIO]
-connect_bd_intf_net [get_bd_intf_ports gpio_pb]  [get_bd_intf_pins axi_gpio_pb/GPIO]
 connect_bd_intf_net [get_bd_intf_ports gpio_dp]  [get_bd_intf_pins axi_gpio_dip_sw/GPIO]
 
 # UART board connection
 connect_bd_intf_net [get_bd_intf_ports pl_uart_bank713] [get_bd_intf_pins axi_uartlite_0/UART]
 
-# axi_noc_ps/M00_AXI -> SmartConnect -> {GPIO_DIP, GPIO_LED, GPIO_PB, BRAM, DMA_LITE, UART}
-connect_bd_intf_net [get_bd_intf_pins axi_noc_ps/M00_AXI] [get_bd_intf_pins axi_smc/S00_AXI]
+# FPD_AXI_PL -> SmartConnect -> {GPIO_DIP, GPIO_LED, GPIO_PB, BRAM, DMA_LITE, UART}
+connect_bd_intf_net [get_bd_intf_pins ps_wizard_0/FPD_AXI_PL] [get_bd_intf_pins axi_smc/S00_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins axi_gpio_dip_sw/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M01_AXI] [get_bd_intf_pins axi_gpio_led/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M02_AXI] [get_bd_intf_pins axi_gpio_pb/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M03_AXI] [get_bd_intf_pins axi_bram_ctrl_0/S_AXI]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M04_AXI] [get_bd_intf_pins axi_dma_0/S_AXI_LITE]
 connect_bd_intf_net [get_bd_intf_pins axi_smc/M05_AXI] [get_bd_intf_pins axi_uartlite_0/S_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_smc/M06_AXI] [get_bd_intf_pins pl_aperture_anchor/S_AXI]
 
 # DMA data ports -> PL NoC (to DDR)
 connect_bd_intf_net [get_bd_intf_pins axi_dma_0/M_AXI_MM2S] [get_bd_intf_pins axi_noc_pl/S00_AXI]
@@ -162,14 +141,12 @@ connect_bd_net [get_bd_pins ps_wizard_0/pl0_ref_clk] \
     [get_bd_pins axi_smc/aclk] \
     [get_bd_pins axi_gpio_dip_sw/s_axi_aclk] \
     [get_bd_pins axi_gpio_led/s_axi_aclk] \
-    [get_bd_pins axi_gpio_pb/s_axi_aclk] \
     [get_bd_pins axi_bram_ctrl_0/s_axi_aclk] \
     [get_bd_pins axi_dma_0/s_axi_lite_aclk] \
     [get_bd_pins axi_dma_0/m_axi_mm2s_aclk] \
     [get_bd_pins axi_dma_0/m_axi_s2mm_aclk] \
     [get_bd_pins axis_data_fifo_0/s_axis_aclk] \
-    [get_bd_pins axi_uartlite_0/s_axi_aclk] \
-    [get_bd_pins pl_aperture_anchor/aclk]
+    [get_bd_pins axi_uartlite_0/s_axi_aclk]
 
 # Step 7: Reset connections
 
@@ -177,12 +154,10 @@ connect_bd_net [get_bd_pins rst_pl0/peripheral_aresetn] \
     [get_bd_pins axi_smc/aresetn] \
     [get_bd_pins axi_gpio_dip_sw/s_axi_aresetn] \
     [get_bd_pins axi_gpio_led/s_axi_aresetn] \
-    [get_bd_pins axi_gpio_pb/s_axi_aresetn] \
     [get_bd_pins axi_bram_ctrl_0/s_axi_aresetn] \
     [get_bd_pins axi_dma_0/axi_resetn] \
     [get_bd_pins axis_data_fifo_0/s_axis_aresetn] \
-    [get_bd_pins axi_uartlite_0/s_axi_aresetn] \
-    [get_bd_pins pl_aperture_anchor/aresetn]
+    [get_bd_pins axi_uartlite_0/s_axi_aresetn]
 
 # Step 8: Interrupt connections
 
@@ -201,60 +176,30 @@ foreach idx {2 3 4 5 6 7 11 12 13 14 15} {
 
 # Step 9: Address assignments
 
-# PL peripherals, reached from the PS cores through axi_noc_ps/M00_AXI.
+# PL peripherals, reached from the PS cores through ps_wizard_0/FPD_AXI_PL.
 #
-# Two things differ from the Gen 1 (VCK190) version of this file, both
-# forced by the NoC-based PS-to-PL path (see golden_ref.tcl's header):
-#   - the target is each PS core's own address space, not a master port.
-#     M00_AXI is a NoC port and has no address space of its own.
-#   - the peripherals live inside M00_AXI's NoC aperture, based at
-#     0x201_0000_0000, not at the Gen 1 0xA4000000. Addresses outside the
-#     aperture are not decoded to the PL at all.
-# The 64K-per-peripheral layout (and 8K for BRAM) is carried over as-is,
-# just rebased into the aperture.
+# The direct PS-to-PL master decodes the conventional 0xA400_0000 range --
+# the same window AMD's ftloop demo uses for this board. Because it bypasses
+# the NoC there is no aperture span to keep byte-identical with the golden,
+# which is what an earlier NoC-routed revision of this port required.
 #
-# Assigned for the cores that reach PL, excluded for the rest -- an
-# unassigned, un-excluded slave segment is a BD 41-1356 critical warning
-# per address space.
-# pl_aperture_base / pl_aperture_size come from golden_ref.tcl, sourced above.
-# They are the reserved PS-to-PL window, and this layout must fill it exactly
-# -- see the aperture-contract comment in golden_ref.tcl.
+# The target is each PS core's own address space (Gen 2 assigns from the
+# cores, not from a master port). Assigned for the cores that reach PL and
+# excluded for the rest, or Vivado emits BD 41-1356 per address space.
 set pl_segments {
-    {axi_bram_ctrl_0/S_AXI/Mem0   0x00000000 0x00002000}
-    {axi_gpio_dip_sw/S_AXI/Reg    0x00010000 0x00010000}
-    {axi_gpio_led/S_AXI/Reg       0x00020000 0x00010000}
-    {axi_gpio_pb/S_AXI/Reg        0x00030000 0x00010000}
-    {axi_dma_0/S_AXI_LITE/Reg     0x00040000 0x00010000}
-    {axi_uartlite_0/S_AXI/Reg     0x00050000 0x00010000}
-    {pl_aperture_anchor/S_AXI/Reg 0x0FFF0000 0x00010000}
+    {axi_bram_ctrl_0/S_AXI/Mem0   0xA4000000 0x00002000}
+    {axi_gpio_dip_sw/S_AXI/Reg    0xA4010000 0x00010000}
+    {axi_gpio_led/S_AXI/Reg       0xA4020000 0x00010000}
+    {axi_gpio_pb/S_AXI/Reg        0xA4030000 0x00010000}
+    {axi_dma_0/S_AXI_LITE/Reg     0xA4040000 0x00010000}
+    {axi_uartlite_0/S_AXI/Reg     0xA4050000 0x00010000}
 }
-
-# Fail now, not at pr_verify. The M00_AXI NSU records the exact span of the
-# segments behind it; if that span differs from what the golden reserved, the
-# overlay is silently incompatible with the boot PDI and only pr_verify -- at
-# the very end of implementation -- notices.
-set pl_span 0
-foreach seg $pl_segments {
-    lassign $seg seg_path seg_offset seg_range
-    set seg_end [expr {$seg_offset + $seg_range}]
-    if {$seg_end > $pl_span} { set pl_span $seg_end }
-}
-if {$pl_span != $pl_aperture_size} {
-    error [format \
-        "PL peripheral layout spans 0x%X but golden_ref.tcl reserves 0x%X.\
- The M00_AXI NSU aperture must match exactly or pr_verify will reject this\
- overlay against the golden. Adjust pl_segments here, or pl_aperture_size in\
- golden_ref.tcl (and rebuild the golden)." $pl_span $pl_aperture_size]
-}
-puts [format "PL aperture check: layout spans 0x%X, matches reserved 0x%X" \
-    $pl_span $pl_aperture_size]
 
 foreach seg $pl_segments {
     lassign $seg seg_path seg_offset seg_range
-    set abs_offset [format 0x%012x [expr {$pl_aperture_base + $seg_offset}]]
     foreach core {pmcps_0_psv_cortexa72_0 pmcps_0_psv_cortexa72_1 \
                    pmcps_0_psv_dpc_0 pmcps_0_psv_pmc_0} {
-        assign_bd_address -offset $abs_offset -range $seg_range \
+        assign_bd_address -offset $seg_offset -range $seg_range \
             -target_address_space [get_bd_addr_spaces ps_wizard_0/${core}] \
             [get_bd_addr_segs $seg_path] -force
     }
@@ -270,13 +215,14 @@ foreach seg $pl_segments {
 # a second, higher aperture for this board -- see its header comment). If
 # one gets added, the kernel's CMA pool needs to stay reachable from here
 # too, same as the DDR_LOW1 mapping on the Gen1 VCK190 golden reference.
-assign_bd_address -offset 0x00000000 -range 0x80000000 \
-    -target_address_space [get_bd_addr_spaces axi_dma_0/Data_MM2S] \
-    [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_LEGACY] -force
-
-assign_bd_address -offset 0x00000000 -range 0x80000000 \
-    -target_address_space [get_bd_addr_spaces axi_dma_0/Data_S2MM] \
-    [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_LEGACY] -force
+foreach ch {Data_MM2S Data_S2MM} {
+    assign_bd_address -offset 0x00000000 -range 0x80000000 \
+        -target_address_space [get_bd_addr_spaces axi_dma_0/$ch] \
+        [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_LEGACY] -force
+    assign_bd_address -offset 0x000800000000 -range 0x80000000 \
+        -target_address_space [get_bd_addr_spaces axi_dma_0/$ch] \
+        [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_MED] -force
+}
 
 # Step 10: Validate and save
 

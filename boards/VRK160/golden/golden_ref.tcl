@@ -39,17 +39,16 @@
 # Confirmed from two real build attempts (Vivado 19-7090/19-8017/BD 5-232
 # on earlier versions of this file):
 #   - PS_USE_M_AXI_FPD / PS_USE_M_AXI_LPD are not valid ps_wizard properties
-#     at all ("Invalid parameter ... Ignoring"), and ps_wizard has NO
-#     M_AXI_FPD/M_AXI_LPD pins at all -- confirmed directly ("No interface
-#     pins matched 'get_bd_intf_pins ps_wizard_0/M_AXI_FPD'", "Arguments to
-#     the connect_bd_intf_net command cannot be empty"). There is no
-#     dedicated PS-to-PL control-path master pin on Gen 2 the way CIPS had
-#     one on Gen 1. Instead (confirmed from design_1.tcl, where FPD_CCI_NOC0
-#     reaches both MC_0 and M00_AXI as connection destinations), the PS-to-PL
-#     path goes through the axi_noc2 instance's own PL-facing AXI master
-#     port (M00_AXI here), fed from a PS NoC slave port (S00_AXI/
-#     FPD_CCI_NOC0 below) alongside its DDR destination. See the M00_AXI
-#     setup further down.
+#     at all, and ps_wizard has NO M_AXI_FPD/M_AXI_LPD pins -- confirmed
+#     directly ("No interface pins matched 'ps_wizard_0/M_AXI_FPD'"). The
+#     Gen 2 equivalent is PS_USE_FPD_AXI_PL, which exposes an FPD_AXI_PL
+#     master that reaches the PL *directly*, bypassing the NoC. PL
+#     peripherals then live at conventional 0xA400_0000-range addresses.
+#     (An earlier revision of this file routed PS-to-PL control through the
+#     NoC's own M00_AXI port instead; that works and passes pr_verify, but
+#     forces every overlay to reproduce the NoC NSU's address span exactly.
+#     FPD_AXI_PL removes that constraint, and is what AMD's own VRK160
+#     designs use.)
 #   - PS_IRQ_USAGE is a real key, but flat (CH0 1 CH1 1 ...) rather than
 #     CIPS's nested ({CH0 1} {CH1 1} ...) -- confirmed from the Vivado
 #     19-8017 error text, which echoed the (all-zero) current value in this
@@ -57,11 +56,10 @@
 #
 # Still NOT confirmed either way:
 #   - PS_NUM_F2P0_INTR_INPUTS / PS_NUM_F2P1_INTR_INPUTS key names.
+#   - whether the MIO peripheral set below is complete for every use case;
+#     it is copied wholesale from AMD's ftloop demo for this board.
 #   - pl1..3_ref_clk/resetn pin names (pattern-matched from pl0_ref_clk/
 #     pl0_resetn, not directly observed).
-#   - the M00_AXI APERTURES value (0x201_0000_0000, 1G) -- copied from the
-#     reference design for the same part, likely a fixed per-device NoC
-#     address convention, but not independently derived.
 #   - whether axi_noc2 supports inter-NoC INI ports the same way axi_noc
 #     does (used below, and in base.tcl, to keep the boot NoC solution
 #     locked while the base overlay adds PL DMA masters).
@@ -107,6 +105,11 @@ if {![info exists design_name] || $design_name eq ""} {
 set list_projs [get_projects -quiet]
 if { $list_projs eq "" } {
     create_project $design_name $design_name -part xcvr1602-vsva2488-2MP-e-S-es1 -force
+
+    # PL pin constraints (push buttons). Sourced here so both the golden and
+    # every overlay that sources this file get the same IO placement.
+    add_files -fileset constrs_1 -norecurse \
+        [file join [file dirname [info script]] vrk160_pl_io.xdc]
     set_property BOARD_PART xilinx.com:vrk160:part0:1.1 [current_project]
 }
 
@@ -131,39 +134,9 @@ if { ${design_name} eq "" } {
     current_bd_design $design_name
 }
 
-# PS-TO-PL APERTURE CONTRACT
-#
-# The M00_AXI NSU records the *exact span of the address segments assigned
-# behind it* -- not the declared CONFIG.APERTURES value, and not a rounded
-# power-of-two bucket. Because M00_AXI is fed by S00_AXI, which is a boot
-# partition NMU, segmented configuration requires that span to be byte-for-byte
-# identical in the golden and in every overlay built against it. A mismatch is
-# caught only at pr_verify (Dfx 88-139, "SegConfig-Validation-12"), 40 minutes
-# into the overlay build.
-#
-# So the window is declared once, here. The golden reserves exactly this much
-# with its tie-off; every overlay lays its peripherals out to fill exactly this
-# much and asserts as much before it starts building.
-#
-# SIZING: this is deliberately far larger than any single overlay needs. The
-# span must be identical across ALL overlays sharing this golden, so if an
-# overlay needed a bigger window the golden -- and therefore BOOT.BIN --
-# would have to be rebuilt, and one boot image could no longer serve several
-# overlays. 256 MB out of the 1 GB declared aperture costs nothing physical
-# (it is address space, not logic) and leaves room for a full QICK overlay
-# (tProc memories, per-channel readout and signal-generator blocks) alongside
-# the small "base" overlay. Treat it as fixed.
-#
-# An overlay fills the window by placing its LAST address segment so that it
-# ends exactly at pl_aperture_base + pl_aperture_size. Overlays whose real
-# peripherals do not reach that far use a small "aperture anchor" slave at the
-# top -- see base.tcl for the pattern to copy.
-set pl_aperture_base 0x020100000000
-set pl_aperture_size 0x10000000
-
 # DESIGN CREATION
 proc create_root_design { parentCell } {
-    global design_name pl_aperture_base pl_aperture_size
+    global design_name
 
     if { $parentCell eq "" } { set parentCell [get_bd_cells /] }
     set parentObj [get_bd_cells $parentCell]
@@ -179,8 +152,32 @@ proc create_root_design { parentCell } {
     # project_1/design_1.tcl), not as one flat list like versal_cips.
     set ps_wizard_0 [create_bd_cell -type ip -vlnv xilinx.com:ip:ps_wizard:1.0 ps_wizard_0]
 
+    # MIO peripherals.
+    #
+    # The ps_pmc_fixed_io board preset does NOT enable these -- every working
+    # VRK160 design sets them explicitly. Without them the pins are simply not
+    # muxed to the peripherals, and the symptom is a board that boots to total
+    # silence: no PLM output, no console, and (without SD1) no way to read
+    # BOOT.BIN off the card at all.
+    #
+    # Values taken from AMD's ftloop demo for this board
+    # (demo_examples/ftloop_CL6323708/.../bd_seg.tcl), which is known to boot.
+    # The SD tap delays in particular are board-specific timing and must not
+    # be invented.
     set_property -dict [list \
         CONFIG.PS_BOARD_INTERFACE {ps_pmc_fixed_io} \
+        CONFIG.PS_PMC_CONFIG(PS_UART0_PERIPHERAL) {ENABLE 1 IO PMC_MIO_42:43 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PS_UART1_PERIPHERAL) {ENABLE 1 IO PMC_MIO_38:39 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PMC_SD1_30AD) {CD_ENABLE 1 POW_ENABLE 1 WP_ENABLE 0 RESET_ENABLE 0 CD_IO PMC_MIO_28 POW_IO PMC_MIO_51 WP_IO PMC_MIO_1 RESET_IO PMC_MIO_12 CLK_50_SDR_ITAP_DLY 0x25 CLK_50_SDR_OTAP_DLY 0x4 CLK_50_DDR_ITAP_DLY 0x2A CLK_50_DDR_OTAP_DLY 0x3 CLK_100_SDR_OTAP_DLY 0x3 CLK_200_SDR_OTAP_DLY 0x2} \
+        CONFIG.PS_PMC_CONFIG(PMC_SD1_30AD_PERIPHERAL) {PRIMARY_ENABLE 0 SECONDARY_ENABLE 1 IO PMC_MIO_26:36 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PS_ENET0_PERIPHERAL) {ENABLE 1 IO PS_MIO_0:11 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PS_ENET0_MDIO) {ENABLE 1 IO PS_MIO_24:25 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PS_I2C0_PERIPHERAL) {ENABLE 1 IO PMC_MIO_46:47 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PS_I2C1_PERIPHERAL) {ENABLE 1 IO PMC_MIO_44:45 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PMC_OSPI_PERIPHERAL) {PRIMARY_ENABLE 1 SECONDARY_ENABLE 0 IO PMC_MIO_0:13 MODE Single} \
+        CONFIG.PS_PMC_CONFIG(PS_USB3_PERIPHERAL) {ENABLE 1 IO PMC_MIO_13:25 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PMC_CRP_PL0_REF_CTRL_FREQMHZ) {100} \
+        CONFIG.PS_PMC_CONFIG(PS_USE_FPD_AXI_PL) {1} \
         CONFIG.PS_PMC_CONFIG(PMC_USE_PMC_AXI_NOC0) {1} \
         CONFIG.PS_PMC_CONFIG(PS_USE_LPD_AXI_NOC0)  {1} \
         CONFIG.PS_PMC_CONFIG(PS_USE_FPD_CCI_NOC)   {1} \
@@ -192,7 +189,38 @@ proc create_root_design { parentCell } {
         CONFIG.PS_PMC_CONFIG(PS_IRQ_USAGE) {CH0 1 CH1 1 CH2 1 CH3 1 CH4 1 CH5 1 CH6 1 CH7 1 CH8 1 CH9 1 CH10 1 CH11 1 CH12 1 CH13 1 CH14 1 CH15 1} \
         CONFIG.PS_PMC_CONFIG(PS_NUM_F2P0_INTR_INPUTS) {8} \
         CONFIG.PS_PMC_CONFIG(PS_NUM_F2P1_INTR_INPUTS) {8} \
-    ] $ps_wizard_0
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI0_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI1_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI1_MASTER) {R5_0} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI2_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI2_MASTER) {R5_1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI3_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI4_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI5_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_GEN_IPI6_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_TTC0_PERIPHERAL_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_TTC0_WAVEOUT) {ENABLE 1 IO PS_MIO_23 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PS_TTC1_PERIPHERAL_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_TTC2_PERIPHERAL_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_TTC3_PERIPHERAL_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PMC_CRP_HSM1_REF_CTRL_FREQMHZ) {200} \
+        CONFIG.PS_PMC_CONFIG(PMC_HSM1_CLK_OUT_ENABLE) {1} \
+        CONFIG.PS_PMC_CONFIG(PS_I2CSYSMON_PERIPHERAL) {ENABLE 0 IO_TYPE MIO IO PS_MIO_13:14} \
+        CONFIG.PS_PMC_CONFIG(SMON_INTERFACE_TO_USE) {I2C} \
+        CONFIG.PS_PMC_CONFIG(SMON_PMBUS_ADDRESS) {0x18} \
+        CONFIG.PS_PMC_CONFIG(PS_SLR_ID) {0} \
+        CONFIG.PS_PMC_CONFIG(PMC_SD0_30AD_PERIPHERAL) {PRIMARY_ENABLE 0 SECONDARY_ENABLE 0 IO PMC_MIO_13:25 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PMC_SD0_30_PERIPHERAL) {PRIMARY_ENABLE 0 SECONDARY_ENABLE 0 IO PMC_MIO_13:25 IO_TYPE MIO} \
+        CONFIG.PS_PMC_CONFIG(PMC_MIO12) {DRIVE_STRENGTH 8mA SLEW slow PULL pullup SCHMITT 0 AUX_IO 0 USAGE GPIO OUTPUT_DATA default DIRECTION out} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO7)  {DRIVE_STRENGTH 8mA SLEW slow PULL disable SCHMITT 0 AUX_IO 0 USAGE Reserved OUTPUT_DATA default DIRECTION in} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO9)  {DRIVE_STRENGTH 8mA SLEW slow PULL disable SCHMITT 0 AUX_IO 0 USAGE Reserved OUTPUT_DATA default DIRECTION in} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO11) {DRIVE_STRENGTH 8mA SLEW slow PULL disable SCHMITT 0 AUX_IO 0 USAGE Reserved OUTPUT_DATA default DIRECTION in} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO12) {DRIVE_STRENGTH 8mA SLEW slow PULL pullup SCHMITT 0 AUX_IO 0 USAGE GPIO OUTPUT_DATA default DIRECTION out} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO15) {DRIVE_STRENGTH 8mA SLEW slow PULL pullup SCHMITT 0 AUX_IO 0 USAGE GPIO OUTPUT_DATA default DIRECTION in} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO16) {DRIVE_STRENGTH 8mA SLEW slow PULL pullup SCHMITT 0 AUX_IO 0 USAGE GPIO OUTPUT_DATA default DIRECTION out} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO21) {DRIVE_STRENGTH 8mA SLEW slow PULL pullup SCHMITT 0 AUX_IO 0 USAGE GPIO OUTPUT_DATA default DIRECTION in} \
+        CONFIG.PS_PMC_CONFIG(PS_MIO22) {DRIVE_STRENGTH 8mA SLEW slow PULL pullup SCHMITT 0 AUX_IO 0 USAGE GPIO OUTPUT_DATA default DIRECTION out} \
+] $ps_wizard_0
     # PMC_USE_PMC_AXI_NOC0/PS_USE_LPD_AXI_NOC0/PS_USE_FPD_CCI_NOC/
     # PS_USE_PMCPL_CLK0/PS_NUM_FABRIC_RESETS/PS_IRQ_USAGE (flat form) are
     # confirmed real keys. PS_USE_PMCPL_CLK1..3 and PS_NUM_F2P0/1_INTR_INPUTS
@@ -201,7 +229,7 @@ proc create_root_design { parentCell } {
     # PS_USE_M_AXI_FPD / PS_USE_M_AXI_LPD deliberately omitted: confirmed
     # invalid on ps_wizard, and confirmed to have no corresponding pins
     # either (see header comment). The PS-to-PL control path used by
-    # base.tcl (GPIO/UART/DMA-lite) goes through axi_noc_ps/M00_AXI
+    # base.tcl (GPIO/UART/DMA-lite) goes through ps_wizard_0/FPD_AXI_PL
     # instead -- set up further down, alongside the rest of axi_noc_ps.
 
     set_property SELECTED_SIM_MODEL tlm $ps_wizard_0
@@ -224,14 +252,15 @@ proc create_root_design { parentCell } {
     set_property -dict [list \
         CONFIG.C0_CH0_LPDDR5_BOARD_INTERFACE {Lpddr5_Controller_C0_CH0_Bank_700_701_702} \
         CONFIG.C0_CH1_LPDDR5_BOARD_INTERFACE {Lpddr5_Controller_C0_CH1_Bank_700_701_702} \
+        CONFIG.MC_CHAN_REGION1 {DDR_CH0_MED} \
         CONFIG.DDR5_DEVICE_TYPE          {Components} \
         CONFIG.DDRMC5_NUM_CH             {2} \
         CONFIG.NUM_SI    {6} \
-        CONFIG.NUM_MI    {1} \
+        CONFIG.NUM_MI    {0} \
         CONFIG.NUM_MC    {1} \
         CONFIG.NUM_NSI   {1} \
-        CONFIG.NUM_NMI   {0} \
-        CONFIG.NUM_CLKS  {8} \
+        CONFIG.NUM_NMI   {3} \
+        CONFIG.NUM_CLKS  {7} \
     ] $axi_noc_ps
     apply_board_connection -board_interface "Lpddr5_Controller_C0_CH0_Bank_700_701_702" \
         -ip_intf "axi_noc_ps/C0_CH0_LPDDR5" -diagram $design_name
@@ -257,42 +286,79 @@ proc create_root_design { parentCell } {
     connect_bd_intf_net [get_bd_intf_ports lpddr5_clk0_1] [get_bd_intf_pins util_ds_buf_0/CLK_IN_D]
     connect_bd_net [get_bd_pins util_ds_buf_0/IBUF_OUT] [get_bd_pins axi_noc_ps/sys_clk0]
 
-    # M00_AXI: PS-to-PL control-path master. Confirmed from the reference
-    # design's exported tcl: ps_wizard has no M_AXI_FPD/M_AXI_LPD pins at
-    # all on Gen 2 (also confirmed directly -- Vivado's "No interface pins
-    # matched 'get_bd_intf_pins ps_wizard_0/M_AXI_FPD'" on a real build of
-    # the earlier version of this file). Instead, axi_noc2 itself exposes a
-    # PL-facing AXI master (M00_AXI), fed from a PS NoC slave port alongside
-    # its DDR (MC_0) destination. APERTURES value copied from the reference
-    # design for the same part (xcvr1602-vsva2488-2MP-e-S-es1) -- likely a
-    # fixed per-device NoC address convention, but not independently
-    # confirmed.
-    set_property -dict [list \
-        CONFIG.DATA_WIDTH {64} \
-        CONFIG.APERTURES {{0x201_0000_0000 1G}} \
-        CONFIG.CATEGORY {pl} \
-    ] [get_bd_intf_pins /axi_noc_ps/M00_AXI]
+    # LPDDR5 controllers C1, C2 and C3 (12 GB on top of C0's 4 GB).
+    # Mirrors the known-good reference design: C1 is dual-channel and shares
+    # the 320 MHz board clock with C0; C2 and C3 are single-channel and take
+    # their reference from the PS's hsm1_ref_clk (200 MHz), which is why
+    # PMC_HSM1_CLK_OUT_ENABLE is set above.
+    foreach {inst ch region bif0 bif1} {
+        axi_noc_c1 2 DDR_CH1 Lpddr5_Controller_C1_CH0_Bank_703_704_705 Lpddr5_Controller_C1_CH1_Bank_703_704_705
+        axi_noc_c2 1 DDR_CH2 Lpddr5_Controller_C2_Bank_706_707_int {}
+        axi_noc_c3 1 DDR_CH3 Lpddr5_Controller_C3_Bank_709_710_int {}
+    } {
+        set cell [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc2:1.1 $inst]
+        set cfg [list \
+            CONFIG.C0_CH0_LPDDR5_BOARD_INTERFACE $bif0 \
+            CONFIG.MC_CHAN_REGION0 $region \
+            CONFIG.DDR5_DEVICE_TYPE {Components} \
+            CONFIG.DDRMC5_NUM_CH   $ch \
+            CONFIG.NUM_SI  {0} CONFIG.NUM_MI {0} CONFIG.NUM_MC {1} \
+            CONFIG.NUM_NSI {2} CONFIG.NUM_NMI {0} CONFIG.NUM_CLKS {0}]
+        if {$bif1 ne {}} { lappend cfg CONFIG.C0_CH1_LPDDR5_BOARD_INTERFACE $bif1 }
+        set_property -dict $cfg $cell
+        apply_board_connection -board_interface $bif0 \
+            -ip_intf "$inst/C0_CH0_LPDDR5" -diagram $design_name
+        if {$bif1 ne {}} {
+            apply_board_connection -board_interface $bif1 \
+                -ip_intf "$inst/C0_CH1_LPDDR5" -diagram $design_name
+        }
+        set_property SELECTED_SIM_MODEL tlm $cell
 
-    # S00-S03_AXI: FPD_CCI_NOC0..3 -> DDR (initial_boot). S00_AXI also
-    # reaches M00_AXI (PS-to-PL control path, not initial_boot -- nothing
-    # on the PL side exists until the base overlay loads).
+        # Single-channel controllers expose MC_0 only.
+        if {$ch == 2} {
+            set conn {MC_0 {read_bw {500} write_bw {500} read_avg_burst {4} write_avg_burst {4} initial_boot {true}} MC_1 {read_bw {500} write_bw {500} read_avg_burst {4} write_avg_burst {4} initial_boot {true}}}
+        } else {
+            set conn {MC_0 {read_bw {500} write_bw {500} read_avg_burst {4} write_avg_burst {4} initial_boot {true}}}
+        }
+        foreach nsi {S00_INI S01_INI} {
+            set_property -dict [list CONFIG.INI_STRATEGY {load} CONFIG.CONNECTIONS $conn] \
+                [get_bd_intf_pins $inst/$nsi]
+        }
+    }
+
+    # Inter-NoC links: PS NoC -> each remote controller
+    connect_bd_intf_net [get_bd_intf_pins axi_noc_ps/M00_INI] [get_bd_intf_pins axi_noc_c1/S00_INI]
+    connect_bd_intf_net [get_bd_intf_pins axi_noc_ps/M01_INI] [get_bd_intf_pins axi_noc_c2/S00_INI]
+    connect_bd_intf_net [get_bd_intf_pins axi_noc_ps/M02_INI] [get_bd_intf_pins axi_noc_c3/S00_INI]
+    foreach nmi {M00_INI M01_INI M02_INI} {
+        set_property -dict [list CONFIG.INI_STRATEGY {load}] [get_bd_intf_pins axi_noc_ps/$nmi]
+    }
+
+    # Reference clocks: C1 shares the board LPDDR5 clock, C2/C3 use hsm1_ref_clk
+    connect_bd_net [get_bd_pins util_ds_buf_0/IBUF_OUT] [get_bd_pins axi_noc_c1/sys_clk0]
+    connect_bd_net [get_bd_pins ps_wizard_0/hsm1_ref_clk] \
+        [get_bd_pins axi_noc_c2/sys_clk0] \
+        [get_bd_pins axi_noc_c3/sys_clk0]
+
+    # S00-S03_AXI: FPD_CCI_NOC0..3 -> DDR (initial_boot).
+    #
     # Every NoC interface that reaches the DDR MC must connect to BOTH
     # channels (MC_0 and MC_1) -- all or none -- because the controller is
     # configured dual-channel (DDRMC5_NUM_CH 2). Connecting only MC_0 still
     # builds, but Vivado flags BD 41-3714 and the result has *incorrect DDR
     # addressing on hardware*. Confirmed against the reference design, whose
     # every PS slave port lists both MCs.
+    # Remote controllers C1/C2/C3 are reached through inter-NoC links
+    # (M00/M01/M02_INI). Every PS master must list them alongside the local
+    # MC or it can only ever see the first 4 GB.
+    set ini_boot {M00_INI {read_bw {500} write_bw {500} initial_boot {true}} M01_INI {read_bw {500} write_bw {500} initial_boot {true}} M02_INI {read_bw {500} write_bw {500} initial_boot {true}}}
+
     set mc_boot {MC_0 {read_bw {5} write_bw {5} read_avg_burst {4} write_avg_burst {4} initial_boot {true}} MC_1 {read_bw {5} write_bw {5} read_avg_burst {4} write_avg_burst {4} initial_boot {true}}}
 
-    set_property -dict [list \
-        CONFIG.DATA_WIDTH {128} CONFIG.REGION {0} \
-        CONFIG.CONNECTIONS "$mc_boot M00_AXI {read_bw {5} write_bw {5}}" \
-        CONFIG.DEST_IDS {M00_AXI:0x0} CONFIG.NOC_PARAMS {} CONFIG.CATEGORY {ps_cci} \
-    ] [get_bd_intf_pins /axi_noc_ps/S00_AXI]
-    foreach idx {1 2 3} {
+    foreach idx {0 1 2 3} {
         set_property -dict [list \
             CONFIG.DATA_WIDTH {128} CONFIG.REGION {0} \
-            CONFIG.CONNECTIONS $mc_boot \
+            CONFIG.CONNECTIONS [concat $mc_boot $ini_boot] \
             CONFIG.DEST_IDS {} CONFIG.NOC_PARAMS {} CONFIG.CATEGORY {ps_cci} \
         ] [get_bd_intf_pins /axi_noc_ps/S0${idx}_AXI]
     }
@@ -300,14 +366,14 @@ proc create_root_design { parentCell } {
     # S04_AXI: LPD_AXI_NOC0 -> DDR (initial_boot)
     set_property -dict [list \
         CONFIG.DATA_WIDTH {128} CONFIG.REGION {0} \
-        CONFIG.CONNECTIONS $mc_boot \
+        CONFIG.CONNECTIONS [concat $mc_boot $ini_boot] \
         CONFIG.DEST_IDS {} CONFIG.NOC_PARAMS {} CONFIG.CATEGORY {ps_rpu} \
     ] [get_bd_intf_pins /axi_noc_ps/S04_AXI]
 
     # S05_AXI: PMC_AXI_NOC0 -> DDR (initial_boot)
     set_property -dict [list \
         CONFIG.DATA_WIDTH {128} CONFIG.REGION {0} \
-        CONFIG.CONNECTIONS $mc_boot \
+        CONFIG.CONNECTIONS [concat $mc_boot $ini_boot] \
         CONFIG.DEST_IDS {} CONFIG.NOC_PARAMS {} CONFIG.CATEGORY {ps_pmc} \
     ] [get_bd_intf_pins /axi_noc_ps/S05_AXI]
 
@@ -326,8 +392,7 @@ proc create_root_design { parentCell } {
     set_property -dict [list CONFIG.ASSOCIATED_BUSIF {S03_AXI}] [get_bd_pins /axi_noc_ps/aclk3]
     set_property -dict [list CONFIG.ASSOCIATED_BUSIF {S04_AXI}] [get_bd_pins /axi_noc_ps/aclk4]
     set_property -dict [list CONFIG.ASSOCIATED_BUSIF {S05_AXI}] [get_bd_pins /axi_noc_ps/aclk5]
-    set_property -dict [list CONFIG.ASSOCIATED_BUSIF {M00_AXI}] [get_bd_pins /axi_noc_ps/aclk6]
-    set_property -dict [list CONFIG.ASSOCIATED_BUSIF {S00_INI}] [get_bd_pins /axi_noc_ps/aclk7]
+    set_property -dict [list CONFIG.ASSOCIATED_BUSIF {S00_INI}] [get_bd_pins /axi_noc_ps/aclk6]
 
     # PL NoC: PL DMA paths to DDR via inter-NoC (no initial_boot)
     set axi_noc_pl [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_noc2:1.1 axi_noc_pl]
@@ -335,23 +400,28 @@ proc create_root_design { parentCell } {
         CONFIG.NUM_SI    {2} \
         CONFIG.NUM_MI    {0} \
         CONFIG.NUM_MC    {0} \
-        CONFIG.NUM_NMI   {1} \
+        CONFIG.NUM_NMI   {4} \
         CONFIG.NUM_NSI   {0} \
         CONFIG.NUM_CLKS  {1} \
     ] $axi_noc_pl
     set_property SELECTED_SIM_MODEL tlm $axi_noc_pl
 
-    # S00_AXI: PL DMA port 0 -> DDR via inter-NoC (M00_INI)
+    # PL masters reach all four controllers directly -- one NMI each. Chaining
+    # them through the PS NoC's S00_INI instead fails with BD 41-2202: an INI
+    # link must have a single driver or a single load, not a fan-out of both.
+    set pl_ini {M00_INI {read_bw {500} write_bw {500}} M01_INI {read_bw {500} write_bw {500}} M02_INI {read_bw {500} write_bw {500}} M03_INI {read_bw {500} write_bw {500}}}
+
+    # S00_AXI: PL DMA port 0 -> DDR via inter-NoC
     set_property -dict [list \
         CONFIG.DATA_WIDTH {128} CONFIG.REGION {0} \
-        CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+        CONFIG.CONNECTIONS $pl_ini \
         CONFIG.DEST_IDS {} CONFIG.NOC_PARAMS {} CONFIG.CATEGORY {pl} \
     ] [get_bd_intf_pins /axi_noc_pl/S00_AXI]
 
-    # S01_AXI: PL DMA port 1 -> DDR via inter-NoC (M00_INI)
+    # S01_AXI: PL DMA port 1 -> DDR via inter-NoC
     set_property -dict [list \
         CONFIG.DATA_WIDTH {128} CONFIG.REGION {0} \
-        CONFIG.CONNECTIONS {M00_INI {read_bw {500} write_bw {500}}} \
+        CONFIG.CONNECTIONS $pl_ini \
         CONFIG.DEST_IDS {} CONFIG.NOC_PARAMS {} CONFIG.CATEGORY {pl} \
     ] [get_bd_intf_pins /axi_noc_pl/S01_AXI]
 
@@ -359,15 +429,17 @@ proc create_root_design { parentCell } {
 
     # PL Interface Tie-offs (DRC-clean standalone)
 
-    # Tie-off for axi_noc_ps/M00_AXI (PS-to-PL control path; PS master ->
-    # PL slave). Replaces the separate M_AXI_FPD/M_AXI_LPD tie-offs from
-    # the Gen 1 port -- there's a single unified PS-to-PL master now.
+    # Tie-off for ps_wizard_0/FPD_AXI_PL -- the direct PS-to-PL control
+    # master. Enabled by PS_USE_FPD_AXI_PL above; it bypasses the NoC
+    # entirely, so PL peripherals live at conventional 0xA400_0000-range
+    # addresses and there is no NoC aperture to keep in sync between the
+    # golden and its overlays.
     set pl_tieoff_m00axi [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_vip:1.1 pl_tieoff_m00axi]
     set_property -dict [list \
         CONFIG.INTERFACE_MODE {SLAVE} \
         CONFIG.PROTOCOL {AXI4} \
         CONFIG.ADDR_WIDTH {64} \
-        CONFIG.DATA_WIDTH {64} \
+        CONFIG.DATA_WIDTH {128} \
     ] $pl_tieoff_m00axi
 
     # Tie-off for PL NoC S00_AXI (PL DMA port 0 -- needs an AXI master)
@@ -387,6 +459,34 @@ proc create_root_design { parentCell } {
         CONFIG.DATA_WIDTH {128} \
         CONFIG.ADDR_WIDTH {64} \
     ] $pl_tieoff_dma1
+
+    # Push buttons (2 bits, inputs, interrupts enabled).
+    #
+    # Instantiated in the *golden* so the boot partition claims IOB sites
+    # BD37/BG35; an overlay may not add boot-partition IO. The board preset is
+    # deliberately not used -- see vrk160_pl_io.xdc for why. Overlays keep this
+    # cell and simply re-point its S_AXI at their own interconnect.
+    set axi_gpio_pb [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_gpio:2.0 axi_gpio_pb]
+    set_property -dict [list \
+        CONFIG.C_GPIO_WIDTH {2} \
+        CONFIG.C_ALL_INPUTS {1} \
+        CONFIG.C_IS_DUAL {0} \
+        CONFIG.C_INTERRUPT_PRESENT {1} \
+        CONFIG.GPIO_BOARD_INTERFACE {Custom} \
+        CONFIG.USE_BOARD_FLOW {false} \
+    ] $axi_gpio_pb
+
+    create_bd_intf_port -mode Master -vlnv xilinx.com:interface:gpio_rtl:1.0 gpio_pb
+    connect_bd_intf_net [get_bd_intf_ports gpio_pb] [get_bd_intf_pins axi_gpio_pb/GPIO]
+
+    # Tie-off master so the GPIO has a driver in the standalone golden.
+    # Overlays delete just this cell and drive S_AXI from their interconnect.
+    set pl_tieoff_pb [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_vip:1.1 pl_tieoff_pb]
+    set_property -dict [list \
+        CONFIG.INTERFACE_MODE {MASTER} CONFIG.PROTOCOL {AXI4LITE} \
+        CONFIG.ADDR_WIDTH {64} CONFIG.DATA_WIDTH {32} \
+    ] $pl_tieoff_pb
+    connect_bd_intf_net [get_bd_intf_pins pl_tieoff_pb/M_AXI] [get_bd_intf_pins axi_gpio_pb/S_AXI]
 
     # Tie-off for PL interrupts: constant 0
     set pl_tieoff_irq [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 pl_tieoff_irq]
@@ -409,9 +509,15 @@ proc create_root_design { parentCell } {
 
     # PL NoC inter-NoC connection (PL DMA -> DDR)
     connect_bd_intf_net [get_bd_intf_pins axi_noc_pl/M00_INI] [get_bd_intf_pins axi_noc_ps/S00_INI]
+    connect_bd_intf_net [get_bd_intf_pins axi_noc_pl/M01_INI] [get_bd_intf_pins axi_noc_c1/S01_INI]
+    connect_bd_intf_net [get_bd_intf_pins axi_noc_pl/M02_INI] [get_bd_intf_pins axi_noc_c2/S01_INI]
+    connect_bd_intf_net [get_bd_intf_pins axi_noc_pl/M03_INI] [get_bd_intf_pins axi_noc_c3/S01_INI]
+    foreach nmi {M00_INI M01_INI M02_INI M03_INI} {
+        set_property -dict [list CONFIG.INI_STRATEGY {load}] [get_bd_intf_pins axi_noc_pl/$nmi]
+    }
 
-    # PS-to-PL control-path master -> tie-off
-    connect_bd_intf_net [get_bd_intf_pins axi_noc_ps/M00_AXI] [get_bd_intf_pins pl_tieoff_m00axi/S_AXI]
+    # PS-to-PL control-path master (direct, not via NoC) -> tie-off
+    connect_bd_intf_net [get_bd_intf_pins ps_wizard_0/FPD_AXI_PL] [get_bd_intf_pins pl_tieoff_m00axi/S_AXI]
 
     # PL NoC slave ports -> tie-off masters
     connect_bd_intf_net [get_bd_intf_pins pl_tieoff_dma0/M_AXI] [get_bd_intf_pins axi_noc_pl/S00_AXI]
@@ -430,15 +536,20 @@ proc create_root_design { parentCell } {
     connect_bd_net [get_bd_pins ps_wizard_0/lpd_axi_noc0_clk]  [get_bd_pins axi_noc_ps/aclk4]
     connect_bd_net [get_bd_pins ps_wizard_0/pmc_axi_noc0_clk]  [get_bd_pins axi_noc_ps/aclk5]
 
-    # PL clock (pl0_ref_clk) drives PL NoC, tie-offs, and reset
+    # PL clock (pl0_ref_clk) drives PL NoC, tie-offs, and reset.
+    # fpd_axi_pl_aclk is the FPD_AXI_PL port's own clock input -- the Gen 2
+    # counterpart of Gen 1's m_axi_fpd_aclk. Leaving it unconnected fails
+    # validation with BD 41-758.
     connect_bd_net [get_bd_pins ps_wizard_0/pl0_ref_clk] \
         [get_bd_pins axi_noc_ps/aclk6] \
-        [get_bd_pins axi_noc_ps/aclk7] \
         [get_bd_pins axi_noc_pl/aclk0] \
         [get_bd_pins rst_pl0/slowest_sync_clk] \
+        [get_bd_pins ps_wizard_0/fpd_axi_pl_aclk] \
         [get_bd_pins pl_tieoff_m00axi/aclk] \
         [get_bd_pins pl_tieoff_dma0/aclk] \
-        [get_bd_pins pl_tieoff_dma1/aclk]
+        [get_bd_pins pl_tieoff_dma1/aclk] \
+        [get_bd_pins pl_tieoff_pb/aclk] \
+        [get_bd_pins axi_gpio_pb/s_axi_aclk]
 
     # PL resets -> proc_sys_reset
     connect_bd_net [get_bd_pins ps_wizard_0/pl0_resetn] [get_bd_pins rst_pl0/ext_reset_in]
@@ -453,7 +564,9 @@ proc create_root_design { parentCell } {
     connect_bd_net [get_bd_pins rst_pl0/peripheral_aresetn] \
         [get_bd_pins pl_tieoff_m00axi/aresetn] \
         [get_bd_pins pl_tieoff_dma0/aresetn] \
-        [get_bd_pins pl_tieoff_dma1/aresetn]
+        [get_bd_pins pl_tieoff_dma1/aresetn] \
+        [get_bd_pins pl_tieoff_pb/aresetn] \
+        [get_bd_pins axi_gpio_pb/s_axi_aresetn]
 
     # Tie all interrupt inputs to 0
     foreach irq_pin [get_bd_pins ps_wizard_0/pl_ps_irq*] {
@@ -471,6 +584,13 @@ proc create_root_design { parentCell } {
     # (DDR_LOW1-equivalent) range for this LPDDR5 config -- add one only
     # after confirming its base/range in Vivado's Address Editor once more
     # channels are enabled.
+    # Both DDR regions of controller C0 must be mapped: LEGACY (2 GB at 0x0)
+    # and MED (2 GB at 0x8_0000_0000). A working VRK160 image declares both in
+    # its memory node -- reg = <0x0 0x0 0x0 0x80000000  0x8 0x0 0x0 0x80000000>
+    # -- and AMD's ftloop demo assigns both. With only LEGACY the PLM still
+    # loads the whole boot PDI without complaint, but the handoff to u-boot
+    # dies silently right after "Total PLM Boot Time".
+    # LEGACY (2 GB at 0x0) is reachable by every PS core.
     foreach core {pmcps_0_psv_cortexa72_0 pmcps_0_psv_cortexa72_1 \
                    pmcps_0_psv_cortexr5_0 pmcps_0_psv_cortexr5_1 \
                    pmcps_0_psv_dpc_0 pmcps_0_psv_pmc_0 pmcps_0_psv_psm_0} {
@@ -479,22 +599,59 @@ proc create_root_design { parentCell } {
             [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_LEGACY] -force
     }
 
+    # MED (2 GB at 0x8_0000_0000) only for the cores whose address aperture
+    # reaches above 32 bits. The R5s and the PSM are limited to <0x0 [2G]>
+    # and Vivado rejects the assignment with BD 41-1075.
+    foreach core {pmcps_0_psv_cortexa72_0 pmcps_0_psv_cortexa72_1 \
+                   pmcps_0_psv_dpc_0 pmcps_0_psv_pmc_0} {
+        assign_bd_address -offset 0x000800000000 -range 0x80000000 \
+            -target_address_space [get_bd_addr_spaces ps_wizard_0/${core}] \
+            [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_MED] -force
+    }
+
+    # Remote controllers C1/C2/C3: 4 GB each, at the same base addresses a
+    # working VRK160 image reports (0x500/0x600/0x700_0000_0000). Only the
+    # 64-bit-capable cores, same aperture limit as DDR_CH0_MED above.
+    foreach {inst region base} {
+        axi_noc_c1 DDR_CH1 0x050000000000
+        axi_noc_c2 DDR_CH2 0x060000000000
+        axi_noc_c3 DDR_CH3 0x070000000000
+    } {
+        foreach core {pmcps_0_psv_cortexa72_0 pmcps_0_psv_cortexa72_1 \
+                       pmcps_0_psv_dpc_0 pmcps_0_psv_pmc_0} {
+            assign_bd_address -offset $base -range 0x000100000000 \
+                -target_address_space [get_bd_addr_spaces ps_wizard_0/${core}] \
+                [get_bd_addr_segs ${inst}/DDR_MC_PORTS/${region}] -force
+        }
+        foreach idx {0 1} {
+            assign_bd_address -offset $base -range 0x000100000000 \
+                -target_address_space [get_bd_addr_spaces pl_tieoff_dma${idx}/Master_AXI] \
+                [get_bd_addr_segs ${inst}/DDR_MC_PORTS/${region}] -force
+        }
+    }
+
     # PL DMA -> DDR address assignments (through inter-NoC -> PS NoC)
     foreach idx {0 1} {
         assign_bd_address -offset 0x00000000 -range 0x80000000 \
             -target_address_space [get_bd_addr_spaces pl_tieoff_dma${idx}/Master_AXI] \
             [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_LEGACY] -force
+        assign_bd_address -offset 0x000800000000 -range 0x80000000 \
+            -target_address_space [get_bd_addr_spaces pl_tieoff_dma${idx}/Master_AXI] \
+            [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_MED] -force
     }
 
-    # PS -> PL control path (M00_AXI tie-off). The range is the reserved
-    # aperture declared at the top of this file, NOT an arbitrary tie-off
-    # size: the NSU records this span and the overlay must reproduce it
-    # exactly. Assigned for the cores that reach PL in the reference design,
-    # and explicitly excluded for the rest -- an unassigned, un-excluded
-    # slave segment is a BD 41-1356 critical warning per address space.
+    # The tie-off master needs the GPIO mapped in its own address space.
+    assign_bd_address -offset 0xA4030000 -range 0x00010000 \
+        -target_address_space [get_bd_addr_spaces pl_tieoff_pb/Master_AXI] \
+        [get_bd_addr_segs axi_gpio_pb/S_AXI/Reg] -force
+
+    # PS -> PL control path (FPD_AXI_PL tie-off) at the conventional
+    # 0xA400_0000 PL range -- the same window the AMD ftloop demo uses for
+    # its PL peripherals. Assigned for the cores that reach PL, excluded for
+    # the rest, so no BD 41-1356 critical warnings.
     foreach core {pmcps_0_psv_cortexa72_0 pmcps_0_psv_cortexa72_1 \
                    pmcps_0_psv_dpc_0 pmcps_0_psv_pmc_0} {
-        assign_bd_address -offset $pl_aperture_base -range $pl_aperture_size \
+        assign_bd_address -offset 0xA4000000 -range 0x00010000 \
             -target_address_space [get_bd_addr_spaces ps_wizard_0/${core}] \
             [get_bd_addr_segs pl_tieoff_m00axi/S_AXI/Reg] -force
     }
@@ -502,6 +659,16 @@ proc create_root_design { parentCell } {
         catch {exclude_bd_addr_seg \
             -target_address_space [get_bd_addr_spaces ps_wizard_0/${core}] \
             [get_bd_addr_segs pl_tieoff_m00axi/S_AXI/Reg]}
+        # The R5s and the PSM top out at a 2 GB aperture, so every segment
+        # above it must be explicitly excluded or Vivado raises BD 41-1356.
+        foreach seg {axi_noc_ps/DDR_MC_PORTS/DDR_CH0_MED \
+                     axi_noc_c1/DDR_MC_PORTS/DDR_CH1 \
+                     axi_noc_c2/DDR_MC_PORTS/DDR_CH2 \
+                     axi_noc_c3/DDR_MC_PORTS/DDR_CH3} {
+            catch {exclude_bd_addr_seg \
+                -target_address_space [get_bd_addr_spaces ps_wizard_0/${core}] \
+                [get_bd_addr_segs $seg]}
+        }
     }
 
     current_bd_instance $oldCurInst

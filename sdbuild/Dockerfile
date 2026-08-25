@@ -84,6 +84,31 @@ ENV LC_ALL=en_US.UTF-8
 ENV TERM=xterm
 ENV LD_PRELOAD="/lib/x86_64-linux-gnu/libudev.so.1 /lib/x86_64-linux-gnu/libcap.so.2"
 
+# Vivado's bundled gcc (tps/lnx64/gcc-9.3.0) is built RHEL-style and does not
+# know Debian's multiarch include layout, so it finds /usr/include/stdio.h but
+# not /usr/include/x86_64-linux-gnu/bits/libc-header-start.h.
+#
+# This bites during Versal DDRMC generation: MemGen compiles a small native
+# helper whose output are the PHY register headers
+# (*_phy_static_reg.vh / *_phy_dynamic_reg.vh). The compile fails, MemGen
+# carries on without reporting it, generate_target "succeeds", and synthesis
+# dies much later with:
+#   ERROR: [Synth 8-9263] cannot open include file '..._phy_static_reg.vh'
+# Do NOT use C_INCLUDE_PATH / LIBRARY_PATH here. They reach every compiler in
+# the process tree, including the MicroBlaze cross-compiler that MemGen runs in
+# the same script, which then pulls host glibc headers into a bare-metal build:
+#   /usr/include/x86_64-linux-gnu/sys/cdefs.h:24: fatal error: features.h
+# Symlinks are selective: mb-gcc does not search /usr/include by default, so
+# only the native compiler picks these up.
+RUN for d in bits sys gnu asm asm-generic; do \
+        [ -e "/usr/include/$d" ] || [ ! -e "/usr/include/x86_64-linux-gnu/$d" ] \
+            || ln -s "/usr/include/x86_64-linux-gnu/$d" "/usr/include/$d"; \
+    done \
+ && for f in /usr/lib/x86_64-linux-gnu/crt*.o /usr/lib/x86_64-linux-gnu/libc.so \
+             /usr/lib/x86_64-linux-gnu/libc_nonshared.a; do \
+        [ -e "$f" ] && ln -sf "$f" "/usr/lib/$(basename $f)"; \
+    done; true
+
 COPY docker-entrypoint.sh /usr/local/bin/pynq-sdbuild-entrypoint
 RUN chmod 0755 /usr/local/bin/pynq-sdbuild-entrypoint
 

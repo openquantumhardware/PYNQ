@@ -13,9 +13,13 @@ notebooks on a VRK160 image can do::
     base.switches[0].read()
     base.dma  # AXI DMA (loopback via AXI Stream FIFO)
 
-The ``leds``, ``buttons``, and ``switches`` attributes are AXI GPIO
-channels configured with the correct direction and length for the
-VRK160 board (4 LEDs, 4 push-buttons, 4 DIP switches).
+The ``leds``, ``buttons`` and ``switches`` attributes are AXI GPIO
+channels configured with the correct direction and length for the VRK160
+board (4 LEDs, 2 push buttons, 4 DIP switches).
+
+The push buttons are only 2 bits wide, and the cell that drives them is
+declared in the *golden* design rather than here -- their pins share I/O
+bank silicon with LPDDR5, so they belong to the boot partition.
 
 The ``dma`` attribute exposes the AXI DMA engine connected in loopback
 through an AXI Stream FIFO -- useful for validating the PL-to-DDR
@@ -28,7 +32,7 @@ import pynq
 
 _GPIO_MAP = {
     "leds": ("axi_gpio_led", "out", 4),
-    "buttons": ("axi_gpio_pb", "in", 4),
+    "buttons": ("axi_gpio_pb", "in", 2),
     "switches": ("axi_gpio_dip_sw", "in", 4),
 }
 
@@ -36,8 +40,8 @@ _GPIO_MAP = {
 class BaseOverlay(pynq.Overlay):
     """VRK160 base design overlay.
 
-    Provides convenient access to the board's LEDs, push-buttons,
-    DIP switches, and DMA engine through the loaded base design.
+    Provides convenient access to the board's LEDs, push buttons, DIP
+    switches, and DMA engine through the loaded base design.
 
     Parameters
     ----------

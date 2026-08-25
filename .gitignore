@@ -70,3 +70,15 @@ user.props
 .venv/
 *.egg-info/
 .coverage
+# Vivado stray directories
+######################
+# Created when HOME is unset/mis-expanded during a batch Vivado run.
+HOMEUSER=USER/
+# Local backups of a generated project tree.
+*_bkp/
+
+# Board bring-up scratch
+######################
+# Reference artefacts copied off a vendor SD card while debugging. These are
+# AMD's build outputs, not ours to redistribute.
+boards/*/horacio/

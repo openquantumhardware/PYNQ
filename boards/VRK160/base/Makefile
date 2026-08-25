@@ -22,8 +22,12 @@ all: $(GOLDEN_NCR) block_design pdi
 	@echo
 
 # The PL PDI is locked to the golden NoC solution, so the golden reference
-# has to exist before the overlay is built.
-$(GOLDEN_NCR):
+# has to exist before the overlay is built -- and has to be rebuilt whenever
+# the golden's own sources change, or an edit to golden_ref.tcl silently
+# leaves the previous NoC solution and BOOT.BIN in place.
+GOLDEN_SRC := $(wildcard $(GOLDEN_DIR)/*.tcl $(GOLDEN_DIR)/*.xdc)
+
+$(GOLDEN_NCR): $(GOLDEN_SRC)
 	$(MAKE) -C $(GOLDEN_DIR)
 
 golden: $(GOLDEN_NCR)

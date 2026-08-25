@@ -115,10 +115,15 @@ PYNQ_ROOTFS ?= $(CURDIR)/prebuilt/pynq_rootfs.$$(ARCH_$1).tar.gz
 BOARDDIR_$1 := $$(BOARDDIR)/$1
 BITSTREAM_ABS_$1 := $$(patsubst %, $$(BOARDDIR_$1)/%, $$(BITSTREAM_$1))
 
-# Build the board's overlay from its own sources. Delete the artefact to
-# rebuild it; boards without a BITSTREAM entry have nothing to build.
+# Build the board's overlay from its own sources. The Vivado sources are
+# prerequisites so that editing a board's .tcl or .xdc actually triggers a
+# rebuild -- without them make reports "Nothing to be done" and the previous
+# bitstream is silently shipped. Boards without a BITSTREAM entry have
+# nothing to build.
+BOARD_DESIGN_SRC_$1 := $$(wildcard $$(BOARDDIR_$1)/*/*.tcl $$(BOARDDIR_$1)/*/*.xdc)
+
 ifneq ($$(BITSTREAM_$1),)
-$$(BITSTREAM_ABS_$1):
+$$(BITSTREAM_ABS_$1): $$(BOARD_DESIGN_SRC_$1)
 	$$(MAKE) -C $$(dir $$(BITSTREAM_ABS_$1))
 endif
 BUILD_ROOT_$1 := $$(BUILD_ROOT)/$1
@@ -150,7 +155,15 @@ BOOT_STAMP_$1   := $$(BOOT_ROOT_$1)/.boot_built
 BOOT_ENV_$1 := BOARD=$1 BOARD_PATH=$$(BOARDDIR_$1) ARCH=$$(ARCH_$1) \
 	FPGA_MANAGER=$$(FPGA_MANAGER_$1) OUTPUT_DIR=$$(BOOT_ROOT) ROOTDIR=$$(CURDIR)
 
-$$(BOOT_STAMP_$1): $$(BOARD_EDF_ENV_$1) $$(BITSTREAM_ABS_$1) | $$(BOOT_ROOT_$1)
+# The per-board BSP (board.dtsi, u-boot patches/fragments) and the build script
+# itself feed straight into the boot artefacts, so they must be prerequisites.
+# Without them `make` reports "Nothing to be done" after a board.dtsi edit and
+# silently keeps shipping the previous BOOT.BIN.
+BOARD_BSP_FILES_$1 := $$(wildcard $$(BOARDDIR_$1)/edf_bsp/board.dtsi \
+	$$(BOARDDIR_$1)/edf_bsp/u-boot/*)
+
+$$(BOOT_STAMP_$1): $$(BOARD_EDF_ENV_$1) $$(BITSTREAM_ABS_$1) \
+		$$(BOARD_BSP_FILES_$1) $$(SCRIPT_DIR)/build_edf_boot.sh | $$(BOOT_ROOT_$1)
 	$$(BOOT_ENV_$1) $$(SCRIPT_DIR)/build_edf_boot.sh
 	touch $$@
 

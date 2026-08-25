@@ -31,3 +31,48 @@
 		status = "okay";
 	};
 };
+
+/* Board identity. Without EDF_BOARD_DTS the generic Versal SoC SDT is used and
+ * the model string stays "Xilinx Versal"; u-boot prints that instead of the
+ * board name and skips board-specific setup. */
+/ {
+	model = "Xilinx Versal VRK160 Eval board revA";
+};
+
+&{/axi/mmc@f1050000} {
+	/* THE boot blocker: without no-1-8-v u-boot negotiates 1.8 V UHS
+	 * signalling with the SD card, which this board does not support, and
+	 * every read after the hand-off fails:
+	 *     Transfer data timeout / Error reading cluster
+	 *     Failed to load 'Image' / ** No partition table - mmc 0 **
+	 * The PLM is unaffected because the BootROM reads in low-speed mode
+	 * (BOOTMODE 0xE = SD1_LS), so BOOT.BIN loads fine and only u-boot dies.
+	 * Confirmed by diffing against a working VRK160 image's device tree:
+	 * this property was the single difference in the whole mmc node. */
+	no-1-8-v;
+};
+
+&{/axi/ethernet@ff0c0000} {
+	/* The generic SDT has no MDIO bus, so u-boot reports "No ethernet
+	 * found". Linux still brings eth0 up by probing, but with a random MAC
+	 * and without the DP83867 RGMII delay/strap settings below. */
+	phy-handle = <&phy0>;
+
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		phy0: ethernet-phy@1 {
+			#phy-cells = <1>;
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <1>;
+			ti,rx-internal-delay = <0x0b>;
+			ti,tx-internal-delay = <0x0a>;
+			ti,fifo-depth = <1>;
+			ti,dp83867-rxctrl-strap-quirk;
+			reset-assert-us = <100>;
+			reset-deassert-us = <280>;
+			reset-gpios = <&{/axi/gpio@ff0b0000} 12 1>;
+		};
+	};
+};

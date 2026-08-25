@@ -248,7 +248,12 @@ step_extract_artifacts() {
     # kernel-devsrc RPM: on-target build tree (/usr/src/kernel +
     # /lib/modules/<kver>/build) for compiling kernel modules on the board.
     local devsrc_rpm
-    devsrc_rpm=$(find "${BUILDDIR:-${EDF_DIR}/build}/tmp/deploy/rpm" -name 'kernel-devsrc*.rpm' \
+    # Match only the main package: bitbake also emits kernel-devsrc-lic,
+    # -dbg and -dev subpackages, and picking the newest of all of them lands
+    # on whichever finished last -- usually -lic, a few KB of licence text
+    # rather than the ~17 MB source tree. The main package has the version
+    # immediately after the name, so anchor on a digit.
+    devsrc_rpm=$(find "${BUILDDIR:-${EDF_DIR}/build}/tmp/deploy/rpm" -name 'kernel-devsrc-[0-9]*.rpm' \
         -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)
     if [ -n "${devsrc_rpm}" ] && [ -f "${devsrc_rpm}" ]; then
         cp "${devsrc_rpm}" "${board_out}/kernel-devsrc.rpm"
@@ -268,7 +273,10 @@ step_extract_artifacts() {
 _write_versal_boot_config() {
     local board_out="$1"
     local serial_tty="ttyAMA0" env_size=131072
-    local bootargs="earlycon console=${serial_tty},115200 clk_ignore_unused root=/dev/mmcblk0p2 rw rootwait uio_pdrv_genirq.of_id=generic-uio"
+    # cma=512M: PYNQ allocates DMA buffers from the CMA pool (pynq.allocate).
+    # The kernel default is far too small for PL<->DDR streaming; AMD's own
+    # working VRK160 image reserves 512 MB here.
+    local bootargs="earlycon console=${serial_tty},115200 clk_ignore_unused root=/dev/mmcblk0p2 rw rootwait cma=512M uio_pdrv_genirq.of_id=generic-uio"
     local bootcmd="load mmc 0:1 0x10000000 Image; load mmc 0:1 0x20000000 system.dtb; setenv bootargs ${bootargs}; booti 0x10000000 - 0x20000000"
 
     local cmd; cmd=$(mktemp)

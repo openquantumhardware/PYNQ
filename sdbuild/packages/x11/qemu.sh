@@ -26,6 +26,9 @@ echo startfluxbox > /root/.xinitrc
 mkdir /root/armsoc_build
 cd /root/armsoc_build
 
+# freedesktop retired anongit; the driver lives on gitlab.freedesktop.org now.
+# The old host stopped answering (connection times out after ~2 min), which is
+# also why this used to need -c http.sslverify=false.
 git clone https://gitlab.freedesktop.org/xorg/driver/xf86-video-armsoc.git
 cd xf86-video-armsoc
 git apply /armsoc.patch --ignore-whitespace
