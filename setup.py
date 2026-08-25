@@ -18,7 +18,12 @@ from setuptools.command.build_ext import build_ext
 
 # Requirement
 required = [
-    'pynqmetadata',
+    # PYNQ's Versal support (pynq/metadata/clock_dict_view.py) imports
+    # VersalProcSysCore, which only exists on PYNQ-Metadata's pynq-next branch
+    # (0.2.0). The PyPI release is 0.1.x and lacks it, so an unpinned
+    # 'pynqmetadata' installs a package that makes `import pynq` fail with:
+    #   ImportError: cannot import name 'VersalProcSysCore' from 'pynqmetadata'
+    'pynqmetadata @ git+https://github.com/Xilinx/PYNQ-Metadata@pynq-next',
     'pynqutils',
     "setuptools>=24.2.0",
     "cffi",
