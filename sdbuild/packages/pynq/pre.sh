@@ -77,8 +77,16 @@ if [ -n "$REBUILD_PYNQ_SDIST" ]; then
     sleep 10
 
     # build bitstream, microblazes' bsps and binaries
+    #
+    # SDIST_BOARD_ARTEFACTS defaults to 1, which bundles the ZCU104 base
+    # overlay and the PMOD BSP built from its XSA. Both need the ZCU104 part
+    # installed:
+    #   ERROR: [HLS 200-1023] Part 'xczu7ev-ffvc1156-2-i' is not installed.
+    # A Vivado install that only carries the parts for the board being built
+    # does not have it, so let the board opt out. Each board's own overlay is
+    # copied in separately, so nothing is lost.
     cd $BUILD_ROOT/PYNQ
-    make -f build.mk
+    make -f build.mk SDIST_BOARD_ARTEFACTS=${SDIST_BOARD_ARTEFACTS:-1}
     sudo cp dist/*.tar.gz $target/home/xilinx/pynq_git/dist
 else
     # using prebuilt sdist with non-external board

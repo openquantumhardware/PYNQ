@@ -47,11 +47,22 @@ unset PKG_CONFIG_LIBDIR
 
 cd /root
 
-git clone https://github.com/Xilinx/XRT xrt-git
+# git runs under qemu-aarch64-static here, and index-pack's threaded delta
+# resolution livelocks in that emulation: the process spins at 100% CPU with
+# zero I/O and never finishes. Observed on XRT's full history -- 18 hours in,
+# still spinning. Two mitigations, both needed:
+#   * pack.threads=1 avoids the threaded path that deadlocks;
+#   * a shallow single-tag clone leaves far less for it to resolve.
+# Passed with -c rather than `git config --global`: HOME points outside the
+# chroot here, so writing a config file fails with
+#   error: could not lock config file /home/.../.gitconfig
+GIT_NOTHREAD='-c pack.threads=1 -c core.compression=0'
+
+git $GIT_NOTHREAD clone --depth 1 --branch "${XRT_TAG}" \
+    https://github.com/Xilinx/XRT xrt-git
 cd xrt-git
-git checkout "tags/${XRT_TAG}" -b temp
-git submodule init
-git submodule update
+git $GIT_NOTHREAD submodule init
+git $GIT_NOTHREAD submodule update --depth 1
 
 # Force pyxrt to be built in the embedded variant; embedded_system.cmake
 # otherwise skips python/.

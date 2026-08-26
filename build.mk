@@ -6,9 +6,24 @@
 VERSION := 4.0.0
 SDIST := dist/pynq-$(VERSION).tar.gz
 
-BITS := boards/ZCU104/base/base.bit
+# The sdist normally bundles the ZCU104 base overlay and the PMOD BSP built
+# from its XSA. Both need the ZCU104 part installed, which a Vivado install
+# targeting other devices will not have:
+#
+#   ERROR: [HLS 200-1023] Part 'xczu7ev-ffvc1156-2-i' is not installed.
+#
+# Set SDIST_BOARD_ARTEFACTS=0 to build the sdist without them. Images for
+# other boards do not use either, and the sdbuild flow copies each board's
+# own overlay in separately.
+SDIST_BOARD_ARTEFACTS ?= 1
 
+ifeq ($(SDIST_BOARD_ARTEFACTS),1)
+BITS := boards/ZCU104/base/base.bit
 BASE_BSP := pynq/lib/pmod/bsp_iop_pmod/iop_pmoda_mb/lib/libxil.a
+else
+BITS :=
+BASE_BSP :=
+endif
 
 
 all: gitsubmodule $(BITS) $(BASE_BSP) $(SDIST)

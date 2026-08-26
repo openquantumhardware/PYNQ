@@ -635,6 +635,64 @@ make -C boards/VRK160/base   clean
 
 ---
 
+### The build environment
+
+**The image build has to run in the sdbuild container.** `make BOARDS=...`
+checks for `ct-ng` (crosstool-ng), which only the container provides -- it is
+built into `/opt/crosstool-ng` by `sdbuild/Dockerfile` and is not something a
+host normally has, so a native build fails at `checkenv` no matter what else
+is installed. The Vivado steps (`make -C boards/VRK160/base`) do run natively.
+
+```bash
+cd sdbuild
+podman build --build-arg USERNAME=$(whoami) --build-arg USER_UID=$(id -u) \
+             --build-arg USER_GID=$(id -g) -t pynqdock:latest .
+```
+
+Running it, with everything this board actually needed:
+
+```bash
+export XILINX_TOOLS=/path/to/xilinx/2025.2
+export XILINXD_LICENSE_FILE="2100@licence.server"     # or a path to .lic files
+
+podman run --init --rm --network host \
+  --userns=keep-id --security-opt label=disable \
+  -e XILINX_TOOLS -e XILINXD_LICENSE_FILE \
+  -e BOARD_STORE_PATH="$XILINX_TOOLS/data/xhub/boards/XilinxBoardStore" \
+  -v "$XILINX_TOOLS:$XILINX_TOOLS:ro" \
+  -v /path/to/xilinx/DocNav:/path/to/xilinx/DocNav:ro \
+  -v "$PWD:$PWD" -w "$PWD" \
+  --privileged pynqdock:latest \
+  bash -lc "cd $PWD/sdbuild && make BOARDS=VRK160 REBUILD_PYNQ_SDIST=1 REBUILD_PYNQ_ROOTFS=1"
+```
+
+Five things there are not in [`sdbuild/README.md`](../../sdbuild/README.md),
+and each one cost a failed run:
+
+| Flag / mount | Why |
+| --- | --- |
+| `--security-opt label=disable` | SELinux on RHEL-family hosts blocks crun's runtime directory: *"crun: Permission denied: OCI permission denied"* |
+| `--userns=keep-id` | Without it, rootless podman maps your host UID to a subuid and Vivado cannot write the bind-mounted tree: *"Failed to open handle vivado.jou"* |
+| `BOARD_STORE_PATH` | `golden_ref.tcl` aborts without it; the container's own default points at `/opt/XilinxBoardStore`, which has no `vrk160` |
+| the DocNav mount | `settings64.sh` sources DocNav by absolute path from *outside* the version directory, so mounting only `2025.2` breaks `build_edf_boot.sh` |
+| `-v "$PWD:$PWD"` | not `:/workspace`. Yocto bakes absolute paths into `bblayers.conf`, sstate and `tmp/`, so mirroring the host path keeps a cache built elsewhere valid |
+
+**A licence server needs no mount, but does need `--network host`.** Pointing
+`XILINXD_LICENSE_FILE` at a directory with no `.lic` files fails subtly rather
+than loudly: Vivado starts, `enable_beta_device` reports *"28 Beta devices
+matching pattern found, 0 enabled"*, and the part is then not found. The
+VRK160 is `-es1` engineering-sample silicon, so beta-device enablement is not
+optional here.
+
+**Turning `--userns=keep-id` on or off changes file ownership**, and a tree
+written under one mapping can be undeletable under the other. `podman unshare
+rm -rf <path>` clears files owned by a container UID; anything left by a build
+that ran as real root needs real root to remove.
+
+> Do not switch git branches while a build is running against the working
+> tree. Checking out a branch that lacks `boards/VRK160/` deletes the tracked
+> sources from disk mid-build. Use `git worktree` for parallel work.
+
 ## 6. Building an SD card, end to end
 
 This is the whole path from a clean checkout to a booting card, with the
