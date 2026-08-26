@@ -191,14 +191,19 @@ STAGING_$1 := $$(BUILD_ROOT)/$$(UBUNTU_RELEASE).$1
 
 $$(ROOT_$1) : $$(BASE_PATH_$1) $$(BITSTREAM_ABS_$1) $$(STAGE4_DEPENDS_$1) $$(MODULES_$1) $$(KERNEL_DEVSRC_$1) | $$(CCACHEDIR)
 	sudo rm -fr $$(STAGING_$1)
-	mkdir $$(STAGING_$1)
+	sudo mkdir $$(STAGING_$1)
+	sudo chown $$(shell id -u):$$(shell id -g) $$(STAGING_$1)
 	(cd $$(STAGING_$1) && sudo tar -xf $$(realpath $$<))
 	# Lay the EDF kernel modules down BEFORE STAGE4: xrt's pre.sh drops
 	# zocl.ko into /lib/modules/<kver>/extra, so the modules tree must exist.
-	mkdir -p $$(BUILD_ROOT_$1)/modules
+	sudo mkdir -p $$(BUILD_ROOT_$1)/modules
+	# Own it before extracting: the mkdir above runs under sudo, the tar below
+	# does not, so without this tar cannot create lib/modules inside a
+	# root-owned directory. Same chown the staging dir gets a few lines up.
+	sudo chown $$(shell id -u):$$(shell id -g) $$(BUILD_ROOT_$1)/modules
 	cd $$(BUILD_ROOT_$1)/modules && tar -xf $$(MODULES_$1)
 	sudo cp -r --no-preserve=ownership $$(BUILD_ROOT_$1)/modules/lib/* $$(STAGING_$1)/usr/lib/
-	rm -rf $$(BUILD_ROOT_$1)/modules
+	sudo rm -rf $$(BUILD_ROOT_$1)/modules
 	# On-target kernel build tree (/usr/src/kernel + /lib/modules/<kver>/build).
 	rpm2cpio $$(KERNEL_DEVSRC_$1) | ( cd $$(STAGING_$1) && sudo cpio -idmu )
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/install_packages.sh $$(STAGING_$1) $$(STAGE4_PACKAGES_$1)
@@ -311,21 +316,24 @@ DIST_$1 := $$(DIST_ROOT)/$1
 
 $$(STAGE2_$1) : $$(STAGE1_$1) $$(STAGE2_DEPENDS_$1) | $$(CCACHEDIR)
 	sudo rm -rf $$(STAGING_$1)
-	mkdir $$(STAGING_$1)
+	sudo mkdir $$(STAGING_$1)
+	sudo chown $$(shell id -u):$$(shell id -g) $$(STAGING_$1)
 	(cd $$(STAGING_$1) && sudo tar -xf $$<)
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/install_packages.sh $$(STAGING_$1) $$(STAGE2_PACKAGES_$1)
 	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
 
 $$(BASE_$1) : $$(STAGE2_$1) $$(STAGE3_DEPENDS_$1) | $$(IMAGE_ROOT) $$(CCACHEDIR)
 	sudo rm -rf $$(STAGING_$1)
-	mkdir $$(STAGING_$1)
+	sudo mkdir $$(STAGING_$1)
+	sudo chown $$(shell id -u):$$(shell id -g) $$(STAGING_$1)
 	(cd $$(STAGING_$1) && sudo tar -xf $$<)
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/install_packages.sh $$(STAGING_$1) $$(STAGE3_PACKAGES_$1)
 	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
 
 $$(STAGE1_$1): $$(CONFIG_$1)/multistrap.config | $$(BUILD_ROOT) $$(CCACHEDIR)
 	sudo rm -rf $$(STAGING_$1)
-	mkdir $$(STAGING_$1)
+	sudo mkdir $$(STAGING_$1)
+	sudo chown $$(shell id -u):$$(shell id -g) $$(STAGING_$1)
 	$$(PACKAGE_ENV_$1) $$(SCRIPT_DIR)/create_rootfs.sh $$(STAGING_$1) $$(CONFIG_$1) $$(ARCH_$1)
 	(cd $$(STAGING_$1) && sudo tar -cz * > $$@)
 

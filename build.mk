@@ -45,7 +45,15 @@ $(BASE_BSP):
 	cd pynq/lib/pmod && make && make clean
 	cd boards/sw_repo && make clean
 
-$(SDIST):
+# The sdist has to be rebuilt whenever the packaged sources change. Without
+# these prerequisites make sees dist/pynq-<ver>.tar.gz already present and
+# skips it, so an edit to setup.py or to pynq/ is silently packaged from a
+# stale tarball -- which then installs the wrong dependency versions into the
+# image with no error anywhere.
+SDIST_SRC := setup.py $(shell find pynq -name '*.py' 2>/dev/null)
+
+$(SDIST): $(SDIST_SRC)
+	rm -f $(SDIST)
 	python3 setup.py sdist
 
 clean:
