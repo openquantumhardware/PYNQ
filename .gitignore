@@ -46,6 +46,8 @@ dist/
 ######################
 boards/*/base/base/
 boards/*/golden/golden/
+boards/*/rfloop/rfloop/
+boards/*/rfloop/dt_rfloop/
 .Xil/
 *.pb
 hd_visual/
