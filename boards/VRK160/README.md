@@ -484,7 +484,7 @@ boards/VRK160/
 │   └── __init__.py
 ├── edf_bsp/board.dtsi    # CMA pool + zocl node, appended to the device tree
 ├── notebooks/            # copied into the image's Jupyter tree
-└── packages/selftest/    # pynq-selftest, installed into the rootfs
+└── selftest.json         # test manifest for sdbuild/packages/selftest
 ```
 
 ### How they chain together
