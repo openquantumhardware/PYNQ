@@ -17,6 +17,23 @@
 # point PYNQ_VRFDC_IP_REPO at the extracted VRFDC_Vivado_IP_Repo directory.
 
 set design_name "rfloop"
+
+# Vivado accepts CONFIG.* properties that an IP may then silently ignore.
+# CONFIG.IS_ACLK_ASYNC on axis_data_fifo did exactly that here, and the
+# consequence only surfaced much later as a clock-domain mismatch that
+# pointed at the wrong cell. Read back anything whose silent loss would be
+# expensive, and stop rather than build a design that is quietly wrong.
+proc verify_config {cell args} {
+    foreach {prop want} $args {
+        set got [get_property CONFIG.$prop [get_bd_cells $cell]]
+        if {$got ne $want} {
+            puts "ERROR: $cell CONFIG.$prop reads back as '$got', expected '$want'."
+            puts "       The IP did not accept the setting."
+            exit 1
+        }
+    }
+}
+
 set script_dir  [file dirname [file normalize [info script]]]
 
 # Step 0: user IP repository for vrf_data_converter
@@ -130,16 +147,30 @@ set rst_rf [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset rst_rf]
 set tone_src [create_bd_cell -type module -reference dac_tone_src dac_tone_src_0]
 set cap_gate [create_bd_cell -type module -reference adc_capture_gate adc_capture_gate_0]
 
-# Async FIFO: absorbs the burst at 491.52 MHz and hands it to the 100 MHz
-# DMA domain. Its depth is what bounds the capture -- see the gate's header.
+# The burst buffer, entirely in the 491.52 MHz domain. Its depth is what
+# bounds the capture -- see the gate's header.
+#
+# This FIFO does not cross clock domains. An earlier revision asked it to,
+# through CONFIG.IS_ACLK_ASYNC, and the property did not take: M_AXIS kept
+# advertising the input clock and validation failed with
+#   ERROR: [BD 41-237] FREQ_HZ does not match between
+#          /cap_dwidth/S_AXIS(99999001) and /cap_fifo/M_AXIS(491520000)
+# The crossing is an axis_clock_converter now, which is unambiguous about
+# having two clocks.
 set cap_fifo [create_bd_cell -type ip -vlnv xilinx.com:ip:axis_data_fifo cap_fifo]
 set_property -dict [list \
     CONFIG.FIFO_DEPTH {8192} \
     CONFIG.FIFO_MEMORY_TYPE {ultra} \
     CONFIG.TDATA_NUM_BYTES {32} \
     CONFIG.HAS_TLAST {1} \
-    CONFIG.IS_ACLK_ASYNC {1} \
 ] $cap_fifo
+
+# 491.52 MHz -> 100 MHz. Still 256 bits wide here; narrowing happens after.
+set cap_cc [create_bd_cell -type ip -vlnv xilinx.com:ip:axis_clock_converter cap_cc]
+set_property -dict [list \
+    CONFIG.TDATA_NUM_BYTES {32} \
+    CONFIG.HAS_TLAST {1} \
+] $cap_cc
 
 # 256 -> 128 bits: the PL NoC slave ports are 128-bit and defined by the
 # golden, so the DMA cannot be widened to match the converter.
@@ -149,6 +180,12 @@ set_property -dict [list \
     CONFIG.M_TDATA_NUM_BYTES {16} \
     CONFIG.HAS_TLAST {1} \
 ] $dwidth
+
+# Integer widths and depth are echoed back verbatim, so they are safe to
+# assert on; the converter's float and enum settings are not.
+verify_config cap_fifo   FIFO_DEPTH 8192 TDATA_NUM_BYTES 32
+verify_config cap_cc     TDATA_NUM_BYTES 32
+verify_config cap_dwidth S_TDATA_NUM_BYTES 32 M_TDATA_NUM_BYTES 16
 
 # S2MM only: nothing streams towards the DAC over DMA.
 set axi_dma [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 axi_dma_0]
@@ -203,7 +240,8 @@ connect_bd_net $rf_clk \
     [get_bd_pins $vrfdc/m3_axis_aclk] \
     [get_bd_pins dac_tone_src_0/aclk] \
     [get_bd_pins adc_capture_gate_0/aclk] \
-    [get_bd_pins cap_fifo/s_axis_aclk]
+    [get_bd_pins cap_fifo/s_axis_aclk] \
+    [get_bd_pins cap_cc/s_axis_aclk]
 
 # pl0_ref_clk (100 MHz) is the control and DMA domain.
 connect_bd_net [get_bd_pins ps_wizard_0/pl0_ref_clk] \
@@ -212,7 +250,7 @@ connect_bd_net [get_bd_pins ps_wizard_0/pl0_ref_clk] \
     [get_bd_pins axi_dma_0/s_axi_lite_aclk] \
     [get_bd_pins axi_dma_0/m_axi_s2mm_aclk] \
     [get_bd_pins axi_gpio_capture/s_axi_aclk] \
-    [get_bd_pins cap_fifo/m_axis_aclk] \
+    [get_bd_pins cap_cc/m_axis_aclk] \
     [get_bd_pins cap_dwidth/aclk]
 
 # Step 10: Resets
@@ -223,7 +261,7 @@ connect_bd_net [get_bd_pins rst_pl0/peripheral_aresetn] \
     [get_bd_pins $vrfdc/s_axi_aresetn] \
     [get_bd_pins axi_dma_0/axi_resetn] \
     [get_bd_pins axi_gpio_capture/s_axi_aresetn] \
-    [get_bd_pins cap_fifo/m_axis_aresetn] \
+    [get_bd_pins cap_cc/m_axis_aresetn] \
     [get_bd_pins cap_dwidth/aresetn]
 
 connect_bd_net [get_bd_pins clk_rf_wiz/locked] [get_bd_pins rst_rf/dcm_locked]
@@ -233,7 +271,8 @@ connect_bd_net [get_bd_pins rst_rf/peripheral_aresetn] \
     [get_bd_pins $vrfdc/m3_axis_aresetn] \
     [get_bd_pins dac_tone_src_0/aresetn] \
     [get_bd_pins adc_capture_gate_0/aresetn] \
-    [get_bd_pins cap_fifo/s_axis_aresetn]
+    [get_bd_pins cap_fifo/s_axis_aresetn] \
+    [get_bd_pins cap_cc/s_axis_aresetn]
 
 # Step 11: All interface connections.
 #
@@ -259,7 +298,8 @@ connect_bd_intf_net [get_bd_intf_ports vin30]         [get_bd_intf_pins $vrfdc/v
 connect_bd_intf_net [get_bd_intf_pins dac_tone_src_0/m_axis]      [get_bd_intf_pins $vrfdc/s00_axis]
 connect_bd_intf_net [get_bd_intf_pins $vrfdc/m30_axis]            [get_bd_intf_pins adc_capture_gate_0/s_axis]
 connect_bd_intf_net [get_bd_intf_pins adc_capture_gate_0/m_axis]  [get_bd_intf_pins cap_fifo/S_AXIS]
-connect_bd_intf_net [get_bd_intf_pins cap_fifo/M_AXIS]            [get_bd_intf_pins cap_dwidth/S_AXIS]
+connect_bd_intf_net [get_bd_intf_pins cap_fifo/M_AXIS]            [get_bd_intf_pins cap_cc/S_AXIS]
+connect_bd_intf_net [get_bd_intf_pins cap_cc/M_AXIS]              [get_bd_intf_pins cap_dwidth/S_AXIS]
 connect_bd_intf_net [get_bd_intf_pins cap_dwidth/M_AXIS]          [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM]
 connect_bd_intf_net [get_bd_intf_pins axi_dma_0/M_AXI_S2MM]       [get_bd_intf_pins axi_noc_pl/S00_AXI]
 
