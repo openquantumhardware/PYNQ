@@ -44,6 +44,22 @@ ADC_TILE = 0
 DAC_TILE = 1
 TILE_ID_MAX = 3
 
+# Mixer constants, from xvrfdc.h.
+MIXER_TYPE_OFF = 0
+MIXER_TYPE_LOW_POWER = 1
+MIXER_TYPE_FINE = 2
+MIXER_TYPE_COARSE = 3
+
+MIXER_MODE_OFF = 0
+MIXER_MODE_C2C = 1
+MIXER_MODE_C2R = 2
+MIXER_MODE_R2C = 3
+MIXER_MODE_R2R = 4
+
+CRS_MIX_BYPASS = 1
+
+EVNT_SRC_IMMEDIATE = 0
+
 
 def _check(name, *args):
     """Call into the library, raising on a non-zero return code."""
@@ -124,6 +140,36 @@ class VRFdc(pynq.DefaultIP):
         ip = _ffi.new("XVRFdc_Version*")
         _lib.XVRFdc_GetVersions(self._inst, sw, ip)
         return (sw.Major, sw.Minor), (ip.Major, ip.Minor)
+
+    def get_mixer(self, tile_type, tile, block, mixer_type=MIXER_TYPE_FINE, band=0):
+        """Read a block's mixer settings as a cffi struct."""
+        cfg = _ffi.new("XVRFdc_Mixer_Settings*")
+        _check("XVRFdc_GetMixerSettings", self._inst, tile_type, tile, block,
+               mixer_type, band, cfg)
+        return cfg
+
+    def set_mixer_freq(self, tile_type, tile, block, freq_mhz, phase_deg=0.0):
+        """Retune a block's NCO.
+
+        Read-modify-write rather than building the struct from scratch: the
+        other fields (mixer mode, scale, Nyquist zone) come from the Vivado
+        configuration and must not be disturbed by a retune.
+
+        ``freq_mhz`` is signed -- the NCO shifts in either direction.
+
+        On Versal this is how a tone is generated from a DC input, and it is
+        also the call the QICK port depends on for ``set_mixer_freq``.
+        """
+        cfg = self.get_mixer(tile_type, tile, block)
+        cfg.Freq = float(freq_mhz)
+        cfg.PhaseOffset = float(phase_deg)
+        cfg.EventSource = EVNT_SRC_IMMEDIATE
+        _check("XVRFdc_SetMixerSettings", self._inst, tile_type, tile, block, cfg)
+        return cfg
+
+    def get_mixer_freq(self, tile_type, tile, block):
+        """The block's current NCO frequency in MHz."""
+        return self.get_mixer(tile_type, tile, block).Freq
 
     def close(self):
         _lib.XVRFdc_InstanceClose(self._inst)

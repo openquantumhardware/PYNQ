@@ -33,3 +33,28 @@ u32  XVRFdc_GetTileCommonStatus(XVRFdc *InstancePtr, u32 Type, u32 Tile_Id, u32 
 u32  XVRFdc_GetFabClkOutDiv(XVRFdc *InstancePtr, u32 Type, u32 Tile_Id, u16 *FabClkDivPtr);
 u32  XVRFdc_GetFabWrWords(XVRFdc *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *FabricWrVldWordsPtr);
 u32  XVRFdc_GetFabRdWords(XVRFdc *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *FabricRdVldWordsPtr);
+
+/* Mixer / NCO.
+ *
+ * Declared field-for-field so cffi lays the struct out exactly as the
+ * library does. Note NyquistZone lives here rather than behind a separate
+ * Set/GetNyquistZone pair as in XRFdc -- on Versal it is part of the mixer
+ * settings, which is the difference a QICK port has to bridge.
+ */
+typedef struct {
+    u8     MixerType;
+    u8     Band;
+    double Freq;
+    double PhaseOffset;
+    u32    EventSource;
+    u32    CoarseMixFreq;
+    u32    MixerMode;
+    u8     FineMixerScale;
+    u8     NyquistZone;
+    u8     ModeSelect;
+} XVRFdc_Mixer_Settings;
+
+u32  XVRFdc_SetMixerSettings(XVRFdc *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id,
+                             XVRFdc_Mixer_Settings *MixerSettingsPtr);
+u32  XVRFdc_GetMixerSettings(XVRFdc *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id,
+                             u32 MixerType, u32 Band, XVRFdc_Mixer_Settings *MixerSettingsPtr);
