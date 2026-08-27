@@ -171,16 +171,16 @@ set_property -dict [list \
     CONFIG.C_INTERRUPT_PRESENT {0} \
 ] $gpio_cap
 
-# Step 7: Control path -- FPD_AXI_PL -> SmartConnect -> 3 slaves
+# Step 7: Control path -- SmartConnect fanning FPD_AXI_PL out to 3 slaves.
+# Cells only here; every interface is connected in step 11, after the clocks.
 set axi_smc [create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc]
-set_property -dict [list CONFIG.NUM_MI {3} CONFIG.NUM_SI {1} CONFIG.NUM_CLKS {2}] $axi_smc
+# One clock domain: FPD_AXI_PL and all three AXI-Lite slaves are on
+# pl0_ref_clk. The converter's register interface is there too -- only its
+# data streams live in the 491.52 MHz domain.
+set_property -dict [list CONFIG.NUM_MI {3} CONFIG.NUM_SI {1} CONFIG.NUM_CLKS {1}] $axi_smc
 
-connect_bd_intf_net [get_bd_intf_pins ps_wizard_0/FPD_AXI_PL] [get_bd_intf_pins axi_smc/S00_AXI]
-connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins $vrfdc/s_axi]
-connect_bd_intf_net [get_bd_intf_pins axi_smc/M01_AXI] [get_bd_intf_pins axi_dma_0/S_AXI_LITE]
-connect_bd_intf_net [get_bd_intf_pins axi_smc/M02_AXI] [get_bd_intf_pins axi_gpio_capture/S_AXI]
 
-# Step 8: External RF interfaces.
+# Step 8: External RF ports (declared here, connected in step 11).
 #
 # No LOC constraints are needed: the converter's analog and reference-clock
 # pins are fixed by the silicon once the tiles are chosen, which is why the
@@ -192,21 +192,8 @@ create_bd_intf_port -mode Slave  -vlnv xilinx.com:display_vrf_data_converter:dif
 create_bd_intf_port -mode Master -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vout00
 create_bd_intf_port -mode Slave  -vlnv xilinx.com:interface:diff_analog_io_rtl:1.0 vin30
 
-connect_bd_intf_net [get_bd_intf_ports dac0_clk]      [get_bd_intf_pins $vrfdc/dac0_clk]
-connect_bd_intf_net [get_bd_intf_ports adc3_clk]      [get_bd_intf_pins $vrfdc/adc3_clk]
-connect_bd_intf_net [get_bd_intf_ports sysref_dac_in] [get_bd_intf_pins $vrfdc/sysref_dac_in]
-connect_bd_intf_net [get_bd_intf_ports vout00]        [get_bd_intf_pins $vrfdc/vout00]
-connect_bd_intf_net [get_bd_intf_ports vin30]         [get_bd_intf_pins $vrfdc/vin30]
 
-# Step 9: Streams
-connect_bd_intf_net [get_bd_intf_pins dac_tone_src_0/m_axis]      [get_bd_intf_pins $vrfdc/s00_axis]
-connect_bd_intf_net [get_bd_intf_pins $vrfdc/m30_axis]            [get_bd_intf_pins adc_capture_gate_0/s_axis]
-connect_bd_intf_net [get_bd_intf_pins adc_capture_gate_0/m_axis]  [get_bd_intf_pins cap_fifo/S_AXIS]
-connect_bd_intf_net [get_bd_intf_pins cap_fifo/M_AXIS]            [get_bd_intf_pins cap_dwidth/S_AXIS]
-connect_bd_intf_net [get_bd_intf_pins cap_dwidth/M_AXIS]          [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM]
-connect_bd_intf_net [get_bd_intf_pins axi_dma_0/M_AXI_S2MM]       [get_bd_intf_pins axi_noc_pl/S00_AXI]
-
-# Step 10: Clocks
+# Step 9: Clocks
 connect_bd_net [get_bd_pins $vrfdc/clk_dac0] [get_bd_pins clk_rf_wiz/clk_in1]
 
 set rf_clk [get_bd_pins clk_rf_wiz/clk_out1]
@@ -216,8 +203,7 @@ connect_bd_net $rf_clk \
     [get_bd_pins $vrfdc/m3_axis_aclk] \
     [get_bd_pins dac_tone_src_0/aclk] \
     [get_bd_pins adc_capture_gate_0/aclk] \
-    [get_bd_pins cap_fifo/s_axis_aclk] \
-    [get_bd_pins axi_smc/aclk1]
+    [get_bd_pins cap_fifo/s_axis_aclk]
 
 # pl0_ref_clk (100 MHz) is the control and DMA domain.
 connect_bd_net [get_bd_pins ps_wizard_0/pl0_ref_clk] \
@@ -229,7 +215,7 @@ connect_bd_net [get_bd_pins ps_wizard_0/pl0_ref_clk] \
     [get_bd_pins cap_fifo/m_axis_aclk] \
     [get_bd_pins cap_dwidth/aclk]
 
-# Step 11: Resets
+# Step 10: Resets
 connect_bd_net [get_bd_pins rst_pl0/peripheral_aresetn] \
     [get_bd_pins clk_rf_wiz/resetn] \
     [get_bd_pins rst_rf/ext_reset_in] \
@@ -248,6 +234,34 @@ connect_bd_net [get_bd_pins rst_rf/peripheral_aresetn] \
     [get_bd_pins dac_tone_src_0/aresetn] \
     [get_bd_pins adc_capture_gate_0/aresetn] \
     [get_bd_pins cap_fifo/s_axis_aresetn]
+
+# Step 11: All interface connections.
+#
+# Deliberately after the clocks. IPI propagates FREQ_HZ and
+# CLK_DOMAIN along an interface at the moment it is connected, so wiring the
+# streams first leaves cap_fifo/M_AXIS still advertising its input clock and
+# validation fails against cap_dwidth/S_AXIS:
+#   ERROR: [BD 41-237] Bus Interface property FREQ_HZ does not match
+# Control path
+connect_bd_intf_net [get_bd_intf_pins ps_wizard_0/FPD_AXI_PL] [get_bd_intf_pins axi_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins $vrfdc/s_axi]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M01_AXI] [get_bd_intf_pins axi_dma_0/S_AXI_LITE]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M02_AXI] [get_bd_intf_pins axi_gpio_capture/S_AXI]
+
+# External RF pins
+connect_bd_intf_net [get_bd_intf_ports dac0_clk]      [get_bd_intf_pins $vrfdc/dac0_clk]
+connect_bd_intf_net [get_bd_intf_ports adc3_clk]      [get_bd_intf_pins $vrfdc/adc3_clk]
+connect_bd_intf_net [get_bd_intf_ports sysref_dac_in] [get_bd_intf_pins $vrfdc/sysref_dac_in]
+connect_bd_intf_net [get_bd_intf_ports vout00]        [get_bd_intf_pins $vrfdc/vout00]
+connect_bd_intf_net [get_bd_intf_ports vin30]         [get_bd_intf_pins $vrfdc/vin30]
+
+# Datapath
+connect_bd_intf_net [get_bd_intf_pins dac_tone_src_0/m_axis]      [get_bd_intf_pins $vrfdc/s00_axis]
+connect_bd_intf_net [get_bd_intf_pins $vrfdc/m30_axis]            [get_bd_intf_pins adc_capture_gate_0/s_axis]
+connect_bd_intf_net [get_bd_intf_pins adc_capture_gate_0/m_axis]  [get_bd_intf_pins cap_fifo/S_AXIS]
+connect_bd_intf_net [get_bd_intf_pins cap_fifo/M_AXIS]            [get_bd_intf_pins cap_dwidth/S_AXIS]
+connect_bd_intf_net [get_bd_intf_pins cap_dwidth/M_AXIS]          [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM]
+connect_bd_intf_net [get_bd_intf_pins axi_dma_0/M_AXI_S2MM]       [get_bd_intf_pins axi_noc_pl/S00_AXI]
 
 # Step 12: Capture control and interrupts
 connect_bd_net [get_bd_pins axi_gpio_capture/gpio_io_o]  [get_bd_pins adc_capture_gate_0/arm]
