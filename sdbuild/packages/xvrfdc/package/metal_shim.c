@@ -15,7 +15,10 @@
  * another silent memory bug.
  */
 
-#include <metal/init.h>
+/* xvrfdc.h, not <metal/init.h>: libmetal has no init.h, and the driver
+ * header already pulls in the right libmetal declarations. It is also what
+ * AMD's own examples include for exactly this call. */
+#include "xvrfdc.h"
 
 int xvrfdc_metal_init(void)
 {
