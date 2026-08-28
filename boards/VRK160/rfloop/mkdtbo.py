@@ -66,6 +66,33 @@ def body_of(lines, start):
     die("unbalanced braces: the block opened at line %d never closes" % (start + 1))
 
 
+def _split_nodes(lines):
+    """Split a node body into (name, block) pairs and loose property lines."""
+    out, depth, name, block = [], 0, None, []
+    for l in lines:
+        if depth == 0:
+            # Nodes carry a label: "misc_clk_0: misc_clk_0 {". The label is
+            # kept in the line -- the converter references these by phandle.
+            m = re.match(r"^\s*(?:[\w-]+\s*:\s*)?([\w@,.+-]+)\s*\{", l)
+            if m:
+                name, block = m.group(1), [l]
+                depth = l.count("{") - l.count("}")
+                if depth == 0:
+                    out.append((name, block))
+                    name, block = None, []
+                continue
+            out.append((None, [l]))
+            continue
+        block.append(l)
+        depth += l.count("{") - l.count("}")
+        if depth == 0:
+            out.append((name, block))
+            name, block = None, []
+    if block:
+        out.append((name, block))
+    return out
+
+
 def _filter_at_top(lines, names):
     """Drop `names` properties that sit at depth 0 of `lines`."""
     out, depth = [], 0
@@ -96,6 +123,9 @@ def main():
     ap.add_argument("dtsi")
     ap.add_argument("out")
     ap.add_argument("--target", default="/axi")
+    ap.add_argument("--keep", default=r"^(vrf_data_converter|misc_clk)",
+                    help="only child nodes whose name matches this regex are "
+                         "placed in the overlay (empty to keep all)")
     ap.add_argument("--uio-prefix", default="xlnx,vrf-data-converter-",
                     help="append \"generic-uio\" to compatible lists whose "
                          "first entry starts with this (empty to disable)")
@@ -137,6 +167,29 @@ def main():
         kept = [l for l in kept
                 if not any(re.match(r"^\s*%s\s*[=;]" % re.escape(n), l)
                            for n in IRQ_PROPS)]
+
+    # Only IP that needs a kernel driver belongs in the overlay. Everything
+    # PYNQ reaches by MMIO from userspace -- the DMA, the capture GPIO --
+    # must stay out: a node makes the kernel bind its own driver and probe
+    # the hardware. That is not merely redundant. The push-button GPIO the
+    # golden owns is tied off in this overlay and answers nothing, and
+    # letting xgpio probe it took the machine down:
+    #   xgpio_probe -> platform_get_irq_optional -> SError
+    #   Kernel panic - not syncing: Asynchronous SError Interrupt
+    # It was masked for a while by a bug that stripped every compatible, so
+    # nothing bound at all.
+    if args.keep:
+        keep_re = re.compile(args.keep)
+        blocks = _split_nodes(kept)
+        kept, dropped = [], []
+        for name, block in blocks:
+            if name is None or keep_re.match(name):
+                kept.extend(block)
+            else:
+                dropped.append(name)
+        if dropped:
+            print("  dropping (driven from userspace, or unreachable): %s"
+                  % ", ".join(dropped))
 
     if args.uio_prefix:
         pat = re.compile(r'^(\s*compatible\s*=\s*"%s[^"]*")(\s*;)' % re.escape(args.uio_prefix))
