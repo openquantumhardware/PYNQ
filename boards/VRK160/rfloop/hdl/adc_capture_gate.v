@@ -24,6 +24,10 @@ module adc_capture_gate #(
     parameter integer DEPTH       = 8192,
     parameter integer CNT_WIDTH   = 14      // must hold DEPTH
 ) (
+    // Both streams belong to aclk. Vivado infers ASSOCIATED_BUSIF for a
+    // module reference, but only reliably when there is one interface;
+    // stating it keeps the clock domain propagating through both.
+    (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_axis:m_axis, ASSOCIATED_RESET aresetn" *)
     input  wire                   aclk,
     input  wire                   aresetn,
 

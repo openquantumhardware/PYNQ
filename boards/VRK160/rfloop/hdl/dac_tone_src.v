@@ -16,10 +16,14 @@
 
 `timescale 1ps / 1ps
 
+// AMPL is a plain integer, not a sized signed literal: the IP packager
+// cannot infer a format for 16'sd16384 and warns
+//   [IP_Flow 19-329] Unable to determine the value format for HDL parameter
 module dac_tone_src #(
-    parameter integer        SSR   = 8,             // complex samples per beat
-    parameter signed [15:0]  AMPL  = 16'sd16384     // -6 dBFS
+    parameter integer SSR  = 8,      // complex samples per beat
+    parameter integer AMPL = 16384   // -6 dBFS
 ) (
+    (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF m_axis, ASSOCIATED_RESET aresetn" *)
     input  wire              aclk,
     input  wire              aresetn,
 
@@ -35,7 +39,7 @@ module dac_tone_src #(
     genvar i;
     generate
         for (i = 0; i < SSR; i = i + 1) begin : g_lane
-            assign m_axis_tdata[32*i +: 32] = {16'sd0, AMPL};
+            assign m_axis_tdata[32*i +: 32] = {16'd0, AMPL[15:0]};
         end
     endgenerate
 

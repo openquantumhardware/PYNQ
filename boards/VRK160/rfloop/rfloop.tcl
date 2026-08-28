@@ -346,6 +346,18 @@ assign_bd_address -offset 0x000800000000 -range 0x80000000 \
     -target_address_space [get_bd_addr_spaces axi_dma_0/Data_S2MM] \
     [get_bd_addr_segs axi_noc_ps/DDR_MC_PORTS/DDR_CH0_MED] -force
 
+# The golden wires all four LPDDR5 controllers, but only channel 0 is mapped
+# here. Vivado raises a CRITICAL WARNING (BD 41-1356) for every segment that
+# is neither assigned nor excluded, so say so explicitly rather than leave
+# three of them in the log for someone to wonder about later.
+foreach seg {axi_noc_c1/DDR_MC_PORTS/DDR_CH1 \
+             axi_noc_c2/DDR_MC_PORTS/DDR_CH2 \
+             axi_noc_c3/DDR_MC_PORTS/DDR_CH3} {
+    catch {exclude_bd_addr_seg \
+        -target_address_space [get_bd_addr_spaces axi_dma_0/Data_S2MM] \
+        [get_bd_addr_segs $seg]}
+}
+
 # Step 14: Validate and save
 validate_bd_design
 save_bd_design
