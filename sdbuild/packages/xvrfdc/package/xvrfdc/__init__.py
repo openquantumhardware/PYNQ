@@ -251,14 +251,26 @@ class VRFdc(pynq.DefaultIP):
                mixer_type, band, cfg)
         return cfg
 
-    def set_mixer_freq(self, tile_type, tile, block, freq_mhz, phase_deg=0.0):
+    #: Nyquist zones, from xvrfdc.h. Zone 0 is not one of them: a block
+    #: that reads back NyquistZone 0 has never had one set.
+    NYQUIST_ZONE_1 = 1
+    NYQUIST_ZONE_2 = 2
+
+    def set_mixer_freq(self, tile_type, tile, block, freq_mhz, phase_deg=0.0,
+                       nyquist=None):
         """Retune a block's NCO.
 
         Read-modify-write rather than building the struct from scratch: the
         other fields (mixer mode, scale, Nyquist zone) come from the Vivado
         configuration and must not be disturbed by a retune.
 
-        ``freq_mhz`` is signed -- the NCO shifts in either direction.
+        ``freq_mhz`` is signed -- the NCO shifts in either direction. Note
+        the units: this is MHz, while the IP's own DAC_NCO_Freq parameter is
+        in GHz.
+
+        ``nyquist`` sets the zone in the same write. The IP leaves it at 0
+        when nothing configured it, and 0 is not a valid zone -- AMD's
+        reference configuration for I/Q-to-real uses zone 1.
 
         On Versal this is how a tone is generated from a DC input, and it is
         also the call the QICK port depends on for ``set_mixer_freq``.
@@ -267,6 +279,8 @@ class VRFdc(pynq.DefaultIP):
         cfg.Freq = float(freq_mhz)
         cfg.PhaseOffset = float(phase_deg)
         cfg.EventSource = EVNT_SRC_IMMEDIATE
+        if nyquist is not None:
+            cfg.NyquistZone = int(nyquist)
         _check("XVRFdc_SetMixerSettings", self._inst, tile_type, tile, block, cfg)
         return cfg
 
