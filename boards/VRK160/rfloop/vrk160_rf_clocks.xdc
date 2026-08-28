@@ -19,3 +19,12 @@ create_clock -period 2 -name adc3_clk \
 
 set_clock_uncertainty -setup 0.05 [get_clocks dac0_clk]
 set_clock_uncertainty -setup 0.05 [get_clocks adc3_clk]
+
+# arm crosses from the AXI-Lite domain into the converter's fabric clock.
+# adc_capture_gate synchronises it; tell the tool not to time the crossing,
+# or it reports the launch clock against the capture clock and produces the
+# large negative slack that this design first shipped with.
+set arm_sync [get_cells -hier -filter {NAME =~ *adc_capture_gate*arm_sync_reg[0]*}]
+if {[llength $arm_sync]} {
+    set_false_path -to [get_pins -of_objects $arm_sync -filter {REF_PIN_NAME == D}]
+}
