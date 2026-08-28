@@ -313,5 +313,14 @@ class VRFdc(pynq.DefaultIP):
         """Reset a tile."""
         _check("XVRFdc_Reset", self._inst, tile_type, tile)
 
+    def shutdown(self, tile_type, tile):
+        """Shut a tile down.
+
+        Worth doing before reloading a PDI. A tile that was running when the
+        PL is reconfigured does not come back: it reads STATE_OFF afterwards
+        and ControlFSM cannot restart it, timing out waiting for IP ready.
+        """
+        _check("XVRFdc_Shutdown", self._inst, tile_type, tile)
+
     def close(self):
         _lib.XVRFdc_InstanceClose(self._inst)
