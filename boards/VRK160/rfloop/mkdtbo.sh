@@ -55,7 +55,11 @@ dtc -@ -I dts -O dtb -o "$OUT" "$DTS"
 
 # A dtbo with no fragment applies nothing at runtime and reports no error,
 # so check rather than trust.
-if ! dtc -I dtb -O dts "$OUT" 2>/dev/null | grep -q 'fragment@0'; then
+# grep -c, not grep -q: -q exits on the first match, dtc then takes SIGPIPE,
+# and `set -o pipefail` turns that into a failure -- reporting a missing
+# fragment on a file that has one.
+frags=$(dtc -I dtb -O dts "$OUT" 2>/dev/null | grep -c 'fragment@0' || true)
+if [ "${frags:-0}" -eq 0 ]; then
     echo "ERROR: $OUT has no fragment@0; it would apply nothing." >&2
     exit 1
 fi

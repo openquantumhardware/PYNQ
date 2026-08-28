@@ -48,6 +48,9 @@ boards/*/base/base/
 boards/*/golden/golden/
 boards/*/rfloop/rfloop/
 boards/*/rfloop/dt_rfloop/
+boards/*/rfloop/*.dtbo
+boards/*/rfloop/*.overlay.dts
+vivado_pid*.str
 .Xil/
 *.pb
 hd_visual/
