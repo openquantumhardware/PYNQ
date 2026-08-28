@@ -71,7 +71,7 @@ $(overlay_name).dtbo: $(overlay_name).xsa
 	    echo "ERROR: sdtgen produced no pl.dtsi under $(DTBO_DIR)."; \
 	    exit 1; \
 	fi; \
-	./mkdtbo.sh "$$dtsi" $(overlay_name).dtbo
+	./mkdtbo.py "$$dtsi" $(overlay_name).dtbo
 
 clean:
 	rm -rf $(overlay_name) $(DTBO_DIR) *.jou *.log NA .Xil .crashReporter \
