@@ -224,6 +224,14 @@ verify_config cap_cc     TDATA_NUM_BYTES 32
 verify_config cap_dwidth S_TDATA_NUM_BYTES 32 M_TDATA_NUM_BYTES 16
 
 # S2MM only: nothing streams towards the DAC over DMA.
+#
+# c_sg_length_width is not optional here. Without scatter-gather the buffer
+# length register defaults to 14 bits, so a transfer is capped at 16383
+# bytes and PYNQ refuses anything larger:
+#   ValueError: Transfer size is 262144 bytes, which exceeds the maximum
+#   DMA buffer size 16383
+# A burst is CAPTURE_BEATS * 32 bytes, 256 KB, so the register has to be
+# wide enough to count it. 26 bits is the maximum the IP offers.
 set axi_dma [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 axi_dma_0]
 set_property -dict [list \
     CONFIG.c_include_sg {0} \
@@ -233,6 +241,7 @@ set_property -dict [list \
     CONFIG.c_m_axi_s2mm_data_width {128} \
     CONFIG.c_s_axis_s2mm_tdata_width {128} \
     CONFIG.c_s2mm_burst_size {256} \
+    CONFIG.c_sg_length_width {26} \
 ] $axi_dma
 
 # Channel 1 out = arm, channel 2 in = busy.
