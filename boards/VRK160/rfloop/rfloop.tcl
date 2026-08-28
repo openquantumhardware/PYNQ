@@ -318,10 +318,18 @@ foreach idx {2 3 4 5 6 7 8 9 10 11 12 13 14 15} {
 
 # Step 13: Addresses -- same 0xA400_0000 window and the same per-core
 # assign/exclude dance base.tcl documents.
+# The converter needs 2 MB at 0xA4200000, which is what AMD's ftloop
+# reference design assigns it on this board. 256 KB is not enough and the
+# shortfall is not diagnosed anywhere useful: the driver's own
+# XVRFDC_REGION_SIZE is 0x140000, so tiles whose registers sit past the end
+# of a short mapping simply take libmetal down --
+#   metal_io_read: Assertion `0' failed
+# DAC tile 0 reads fine from a 256 KB window and ADC tile 3 does not, which
+# makes it look like a tile problem rather than an address-map one.
 set pl_segments {
-    {vrf_data_converter_0/s_axi/Reg  0xA4000000 0x00040000}
-    {axi_dma_0/S_AXI_LITE/Reg        0xA4040000 0x00010000}
-    {axi_gpio_capture/S_AXI/Reg      0xA4050000 0x00010000}
+    {axi_dma_0/S_AXI_LITE/Reg        0xA4000000 0x00010000}
+    {axi_gpio_capture/S_AXI/Reg      0xA4010000 0x00010000}
+    {vrf_data_converter_0/s_axi/Reg  0xA4200000 0x00200000}
 }
 
 foreach seg $pl_segments {
