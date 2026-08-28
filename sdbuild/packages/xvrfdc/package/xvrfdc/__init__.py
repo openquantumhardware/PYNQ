@@ -40,6 +40,17 @@ _ffi = cffi.FFI()
 _ffi.cdef(_header_text)
 _lib = _ffi.dlopen(os.path.join(_THIS_DIR, "libvrfdc.so"))
 
+# sizeof(XVRFdc), measured on the target by the Makefile. The instance is
+# opaque to this module -- see the note at the top of xvrfdc_functions.c for
+# why it cannot simply be declared as a struct.
+try:
+    from ._size import _SIZE as _INSTANCE_SIZE
+except ImportError:
+    raise ImportError(
+        "xvrfdc/_size.py is missing. It carries sizeof(XVRFdc) as measured on "
+        "the target; run 'make' in the package directory before installing."
+    ) from None
+
 ADC_TILE = 0
 DAC_TILE = 1
 TILE_ID_MAX = 3
@@ -118,7 +129,7 @@ class VRFdc(pynq.DefaultIP):
 
     def __init__(self, description):
         super().__init__(description)
-        self._inst = _ffi.new("XVRFdc*")
+        self._inst = _ffi.new("char[]", _INSTANCE_SIZE)
         self._device = _ffi.new("void**")
 
         base = description.get("phys_addr", 0)
