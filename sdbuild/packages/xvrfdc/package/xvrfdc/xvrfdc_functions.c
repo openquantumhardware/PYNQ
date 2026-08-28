@@ -58,7 +58,15 @@ u32  XVRFdc_Reset(void *InstancePtr, u32 Type, u32 Tile_Id);
 u32  XVRFdc_Shutdown(void *InstancePtr, u32 Type, u32 Tile_Id);
 u32  XVRFdc_StartUpParentGroup(void *InstancePtr, u32 Type, u32 Tile_Id);
 
-u32  XVRFdc_GetFabClkOutDiv(void *InstancePtr, u32 Type, u32 Tile_Id, u16 *FabClkDivPtr);
+/* FabClkDivPtr is u32*, not u16*: xvrfdc.h declares
+ *   u32 XVRFdc_GetFabClkOutDiv(XVRFdc *, u32, u32, u32 *FabClkDivPtr)
+ * and a u16 allocation here would have been overrun by four bytes. */
+u32  XVRFdc_GetFabClkOutDiv(void *InstancePtr, u32 Type, u32 Tile_Id, u32 *FabClkDivPtr);
+
+/* Fabric FIFO. A tile can be FULL with its FIFO disabled, in which case no
+ * data moves between the fabric and the converter. */
+u32  XVRFdc_SetFIFOStatus(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Channel, u32 Enable);
+u32  XVRFdc_GetFIFOStatus(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Channel, u32 *EnabledPtr);
 u32  XVRFdc_GetFabWrWords(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *FabricWrVldWordsPtr);
 u32  XVRFdc_GetFabRdWords(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *FabricRdVldWordsPtr);
 

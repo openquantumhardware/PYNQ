@@ -313,6 +313,35 @@ class VRFdc(pynq.DefaultIP):
         """Reset a tile."""
         _check("XVRFdc_Reset", self._inst, tile_type, tile)
 
+    def fifo_enabled(self, tile_type, tile, channel=0):
+        """Whether the tile's fabric FIFO is enabled."""
+        out = _ffi.new("u32*")
+        _check("XVRFdc_GetFIFOStatus", self._inst, tile_type, tile, channel, out)
+        return bool(out[0])
+
+    def set_fifo(self, tile_type, tile, enable, channel=0):
+        """Enable or disable the tile's fabric FIFO."""
+        _check("XVRFdc_SetFIFOStatus", self._inst, tile_type, tile, channel,
+               1 if enable else 0)
+
+    def fab_words(self, tile_type, tile, block=0):
+        """``(write, read)`` fabric words per cycle for a block.
+
+        These say how many words the converter expects to move each fabric
+        cycle. A mismatch against what the PL actually drives shows up as a
+        signal periodic at the AXI-Stream beat rate rather than as an error.
+        """
+        wr, rd = _ffi.new("u32*"), _ffi.new("u32*")
+        _check("XVRFdc_GetFabWrWords", self._inst, tile_type, tile, block, wr)
+        _check("XVRFdc_GetFabRdWords", self._inst, tile_type, tile, block, rd)
+        return wr[0], rd[0]
+
+    def fab_clk_div(self, tile_type, tile):
+        """The tile's fabric clock output divider."""
+        out = _ffi.new("u32*")
+        _check("XVRFdc_GetFabClkOutDiv", self._inst, tile_type, tile, out)
+        return out[0]
+
     def shutdown(self, tile_type, tile):
         """Shut a tile down.
 
