@@ -70,3 +70,8 @@ u32  XVRFdc_SetMixerSettings(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block
                              XVRFdc_Mixer_Settings *MixerSettingsPtr);
 u32  XVRFdc_GetMixerSettings(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id,
                              u32 MixerType, u32 Band, XVRFdc_Mixer_Settings *MixerSettingsPtr);
+
+/* From metal_shim.c -- see that file for why metal_init is not declared
+ * directly. Must be called once before any device is opened. */
+int  xvrfdc_metal_init(void);
+void xvrfdc_metal_finish(void);

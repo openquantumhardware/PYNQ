@@ -21,7 +21,8 @@ LIBMETAL_INS  := $(CURDIR)/libmetal-install
 CFLAGS  += -fPIC -O2 -I$(LIBMETAL_INS)/include
 LDFLAGS += -L$(LIBMETAL_INS)/lib
 
-SRCS := $(wildcard $(VRFDC_SRC)/*.c)
+# metal_shim.c supplies the metal_init() call libvrfdc leaves to its caller.
+SRCS := $(wildcard $(VRFDC_SRC)/*.c) metal_shim.c
 OBJS := $(SRCS:.c=.o)
 
 SIZE_PY := $(PACKAGE)/_size.py

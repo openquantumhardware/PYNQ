@@ -25,6 +25,7 @@ real applications: ``SetDecimation``, ``SetInterpolation``,
 (multi-tile synchronisation) group. Set those in the Vivado design instead.
 """
 
+import errno
 import os
 import warnings
 
@@ -85,6 +86,27 @@ def _check(name, *args):
 PLATFORM_DEVICES = "/sys/bus/platform/devices"
 SIGNATURE = "vrf_data_converter"
 COMPATIBLE_PREFIX = "xlnx,vrf-data-converter-"
+
+
+_metal_ready = False
+
+
+def _metal_init():
+    """Initialise libmetal once per process.
+
+    libvrfdc leaves this to its caller -- AMD's examples call metal_init()
+    before XVRFdc_InstanceInit -- and skipping it is what made the driver
+    segfault: the bus registry stays empty, metal_device_open() fails, and
+    XVRFdc_InstanceInit dereferences the NULL device pointer.
+    """
+    global _metal_ready
+    if _metal_ready:
+        return
+    status = _lib.xvrfdc_metal_init()
+    # Re-initialisation is reported as an error and is harmless.
+    if status and status != -errno.EALREADY:
+        raise RuntimeError(f"metal_init failed with status {status}")
+    _metal_ready = True
 
 
 def _preflight(base_addr):
@@ -188,6 +210,7 @@ class VRFdc(pynq.DefaultIP):
 
         base = description.get("phys_addr", 0)
         _preflight(base)
+        _metal_init()
         status = _lib.XVRFdc_InstanceInit(self._inst, base, self._device)
         if status:
             raise RuntimeError(
