@@ -64,20 +64,17 @@ $(overlay_name).dtbo: $(overlay_name).xsa
 	rm -rf $(DTBO_DIR) && mkdir -p $(DTBO_DIR)
 	@command -v sdtgen >/dev/null || { \
 	    echo "ERROR: sdtgen not on PATH. Source Vivado settings64.sh."; exit 1; }
-	printf 'set_dt_param -dir %s\nset_dt_param -xsa %s\nset_dt_param -dt_overlay true\ngenerate_sdt\nexit\n' \
+	printf 'set_dt_param -dir %s\nset_dt_param -xsa %s\ngenerate_sdt\nexit\n' \
 	    "$(DTBO_DIR)" "$(CURDIR)/$(overlay_name).xsa" | sdtgen
 	@dtsi=$$(find $(DTBO_DIR) -name 'pl.dtsi' | head -1); \
 	if [ -z "$$dtsi" ]; then \
 	    echo "ERROR: sdtgen produced no pl.dtsi under $(DTBO_DIR)."; \
-	    echo "       Inspect that directory: the overlay flag or the tool"; \
-	    echo "       version may differ from what this rule assumes."; \
 	    exit 1; \
 	fi; \
-	echo "Compiling $$dtsi -> $(overlay_name).dtbo"; \
-	dtc -@ -O dtb -o $(overlay_name).dtbo -I dts "$$dtsi"
+	./mkdtbo.sh "$$dtsi" $(overlay_name).dtbo
 
 clean:
 	rm -rf $(overlay_name) $(DTBO_DIR) *.jou *.log NA .Xil .crashReporter \
-	       *.pdi *.hwh *.xsa *.dtbo
+	       *.pdi *.hwh *.xsa *.dtbo *.overlay.dts
 
 .PHONY: all check_env golden block_design pdi dtbo clean
