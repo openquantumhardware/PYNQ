@@ -82,6 +82,60 @@ def _check(name, *args):
     return ret
 
 
+PLATFORM_DEVICES = "/sys/bus/platform/devices"
+SIGNATURE = "vrf_data_converter"
+COMPATIBLE_PREFIX = "xlnx,vrf-data-converter-"
+
+
+def _preflight(base_addr):
+    """Fail with an explanation rather than a segmentation fault.
+
+    XVRFdc_InstanceInit walks /sys/bus/platform/devices looking for a name
+    ending in "vrf_data_converter", opens it through libmetal and matches
+    its compatible and reg. If metal_device_open fails it carries on and
+    dereferences the NULL device pointer it was handed, which takes the
+    whole interpreter down with no message. Everything it needs is
+    observable from here first.
+    """
+    if not os.path.isdir(PLATFORM_DEVICES):
+        raise RuntimeError(f"{PLATFORM_DEVICES} does not exist")
+
+    devs = [d for d in os.listdir(PLATFORM_DEVICES) if d.endswith(SIGNATURE)]
+    if not devs:
+        raise RuntimeError(
+            "No platform device ending in %r under %s. The overlay's device "
+            "tree node has to be added under an already-populated bus -- on "
+            "Versal /axi -- or the kernel creates the node and no device."
+            % (SIGNATURE, PLATFORM_DEVICES))
+
+    problems = []
+    for d in devs:
+        path = os.path.join(PLATFORM_DEVICES, d)
+        compat_file = os.path.join(path, "of_node", "compatible")
+        try:
+            with open(compat_file, "rb") as f:
+                compat = f.read().decode(errors="replace").split("\0")
+        except OSError:
+            problems.append(f"{d}: no of_node/compatible")
+            continue
+        compat = [c for c in compat if c]
+        if not any(c.startswith(COMPATIBLE_PREFIX) for c in compat):
+            problems.append(f"{d}: compatible {compat} has no "
+                            f"{COMPATIBLE_PREFIX!r} entry")
+            continue
+        if not os.path.isdir(os.path.join(path, "uio")):
+            problems.append(
+                f"{d}: no uio/ -- libmetal opens devices through UIO. Add "
+                f'"generic-uio" to the node\'s compatible list (the kernel '
+                "binds uio_pdrv_genirq to whatever uio_pdrv_genirq.of_id "
+                "names, which this image sets to generic-uio).")
+            continue
+        return  # this one is usable
+
+    raise RuntimeError(
+        "Found %s but none is usable:\n  %s" % (devs, "\n  ".join(problems)))
+
+
 class _Tile:
     """One ADC or DAC tile."""
 
@@ -133,6 +187,7 @@ class VRFdc(pynq.DefaultIP):
         self._device = _ffi.new("void**")
 
         base = description.get("phys_addr", 0)
+        _preflight(base)
         status = _lib.XVRFdc_InstanceInit(self._inst, base, self._device)
         if status:
             raise RuntimeError(

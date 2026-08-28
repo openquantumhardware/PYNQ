@@ -26,7 +26,18 @@ device "axi:zyxclmm_drm".
 /axi also carries its own interrupt-parent, which the children inherit. That
 matters because the interrupt-parent in sdtgen's output is a phandle to
 "imux"; carrying it into the overlay adds a __fixups__ entry, and resolving
-it is what made the kernel refuse the overlay with -ENOENT.
+it is what made the kernel refuse the overlay with -ENOENT. Note that /axi's
+interrupt-parent is the GIC, not the imux, so sdtgen's interrupt numbers do
+not mean the same thing there -- which is why the interrupts are dropped
+rather than re-parented.
+
+Finally, "generic-uio" is appended to the converter's compatible list.
+libmetal opens devices through UIO, and the kernel binds uio_pdrv_genirq to
+whatever matches uio_pdrv_genirq.of_id, which this board's bootargs set to
+"generic-uio". Without it no UIO device is created, metal_device_open fails,
+and XVRFdc_InstanceInit dereferences the NULL it was handed -- a segfault
+with nothing to point at the cause. It goes second in the list because the
+driver compares only the first string against "xlnx,vrf-data-converter-".
 """
 
 import argparse
@@ -55,11 +66,39 @@ def body_of(lines, start):
     die("unbalanced braces: the block opened at line %d never closes" % (start + 1))
 
 
+def _filter_at_top(lines, names):
+    """Drop `names` properties that sit at depth 0 of `lines`."""
+    out, depth = [], 0
+    for l in lines:
+        if depth == 0 and any(re.match(r"^\s*%s\s*[=;]" % re.escape(n), l)
+                              for n in names):
+            depth += l.count("{") - l.count("}")
+            continue
+        out.append(l)
+        depth += l.count("{") - l.count("}")
+    return out
+
+
+def _add_uio(lines, pat):
+    """Append "generic-uio" to compatible lists matching `pat`."""
+    out, n = [], 0
+    for l in lines:
+        m = pat.match(l)
+        if m:
+            l = m.group(1) + ', "generic-uio"' + m.group(2)
+            n += 1
+        out.append(l)
+    return out, n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dtsi")
     ap.add_argument("out")
     ap.add_argument("--target", default="/axi")
+    ap.add_argument("--uio-prefix", default="xlnx,vrf-data-converter-",
+                    help="append \"generic-uio\" to compatible lists whose "
+                         "first entry starts with this (empty to disable)")
     ap.add_argument("--keep-interrupts", action="store_true",
                     help="keep interrupt properties; adds a __fixups__ entry "
                          "for the imux phandle, which the kernel could not "
@@ -85,13 +124,28 @@ def main():
 
     # Drop the wrapper's own properties: the children are being reparented
     # onto /axi, which already declares all of them.
-    # Match "prop = <...>;" and bare "prop;" alike -- ranges has no value.
-    def is_prop(line, names):
-        return any(re.match(r"^\s*%s\s*[=;]" % re.escape(n), line) for n in names)
-
-    kept = [l for l in contents if not is_prop(l, WRAPPER_PROPS)]
+    # Strip the wrapper's own properties -- and ONLY its own. These names
+    # (compatible above all) also occur on every child node, so filtering
+    # the whole body would leave the converter with no compatible at all:
+    # no driver match, no generic-uio binding, and a platform device that
+    # looks present and is useless. Depth 0 here means "directly inside
+    # amba_pl", before any child node opens.
+    kept = _filter_at_top(contents, WRAPPER_PROPS)
     if not args.keep_interrupts:
-        kept = [l for l in kept if not is_prop(l, IRQ_PROPS)]
+        # Interrupt properties are stripped at every depth: they are on the
+        # child nodes, and each one carries the imux phandle.
+        kept = [l for l in kept
+                if not any(re.match(r"^\s*%s\s*[=;]" % re.escape(n), l)
+                           for n in IRQ_PROPS)]
+
+    if args.uio_prefix:
+        pat = re.compile(r'^(\s*compatible\s*=\s*"%s[^"]*")(\s*;)' % re.escape(args.uio_prefix))
+        kept, n_uio = _add_uio(kept, pat)
+        if n_uio == 0:
+            die("no compatible line starts with %r, so no UIO node would be "
+                "created and libmetal could not open the device. Pass "
+                "--uio-prefix '' if that is really intended."
+                % args.uio_prefix)
 
     if not any("{" in l for l in kept):
         die("nothing left to place under %s -- refusing to write an empty overlay"
