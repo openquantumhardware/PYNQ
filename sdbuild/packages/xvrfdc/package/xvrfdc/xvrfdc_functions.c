@@ -14,7 +14,16 @@ typedef unsigned char  u8;
 typedef int            s32;
 typedef unsigned long  metal_phys_addr_t;
 
-typedef struct { u32 Major; u32 Minor; } XVRFdc_Version;
+/* Three fields, not two. Declaring it short made XVRFdc_GetVersions write
+ * 12 bytes into an 8-byte allocation and corrupt the heap:
+ *   free(): invalid next size (fast)
+ * Every struct here is copied field-for-field from xvrfdc.h for this
+ * reason -- cffi trusts these declarations and cannot check them. */
+typedef struct {
+    u32 Major;
+    u32 Minor;
+    u32 Revision;
+} XVRFdc_Version;
 
 /* The driver instance is opaque here on purpose.
  *

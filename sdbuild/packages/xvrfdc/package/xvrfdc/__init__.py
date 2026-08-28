@@ -38,7 +38,12 @@ with open(os.path.join(_THIS_DIR, "xvrfdc_functions.c")) as f:
     _header_text = f.read()
 
 _ffi = cffi.FFI()
-_ffi.cdef(_header_text)
+# pack=1 is not optional. xvrfdc.h wraps everything from XVRFdc_Config to
+# XVRFdc down to byte alignment with #pragma pack(1), which cffi cannot see.
+# Without it XVRFdc_Mixer_Settings comes out 40 bytes instead of 33 and every
+# field after Band sits at the wrong offset -- the NCO would be programmed
+# from whatever happened to land there.
+_ffi.cdef(_header_text, pack=1)
 _lib = _ffi.dlopen(os.path.join(_THIS_DIR, "libvrfdc.so"))
 
 # sizeof(XVRFdc), measured on the target by the Makefile. The instance is
@@ -224,11 +229,12 @@ class VRFdc(pynq.DefaultIP):
 
     @property
     def versions(self):
-        """``(software, ip)`` version tuples as ``(major, minor)``."""
+        """``(software, ip)`` version tuples as ``(major, minor, revision)``."""
         sw = _ffi.new("XVRFdc_Version*")
         ip = _ffi.new("XVRFdc_Version*")
         _lib.XVRFdc_GetVersions(self._inst, sw, ip)
-        return (sw.Major, sw.Minor), (ip.Major, ip.Minor)
+        return ((sw.Major, sw.Minor, sw.Revision),
+                (ip.Major, ip.Minor, ip.Revision))
 
     def get_mixer(self, tile_type, tile, block, mixer_type=MIXER_TYPE_FINE, band=0):
         """Read a block's mixer settings as a cffi struct."""
