@@ -51,6 +51,13 @@ u32  XVRFdc_GetTileEnabled(void *InstancePtr, u32 Type, u32 Tile_Id, u32 *Enable
 u32  XVRFdc_GetTileCurrentState(void *InstancePtr, u32 Type, u32 Tile_Id, u32 *StatePtr);
 u32  XVRFdc_GetTileCommonStatus(void *InstancePtr, u32 Type, u32 Tile_Id, u32 *StatusPtr);
 
+/* Tile power-up. The FSM runs from a start state to an end state; OFF to
+ * FULL brings a tile all the way up. */
+u32  XVRFdc_ControlFSM(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Start, u32 End);
+u32  XVRFdc_Reset(void *InstancePtr, u32 Type, u32 Tile_Id);
+u32  XVRFdc_Shutdown(void *InstancePtr, u32 Type, u32 Tile_Id);
+u32  XVRFdc_StartUpParentGroup(void *InstancePtr, u32 Type, u32 Tile_Id);
+
 u32  XVRFdc_GetFabClkOutDiv(void *InstancePtr, u32 Type, u32 Tile_Id, u16 *FabClkDivPtr);
 u32  XVRFdc_GetFabWrWords(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *FabricWrVldWordsPtr);
 u32  XVRFdc_GetFabRdWords(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 *FabricRdVldWordsPtr);

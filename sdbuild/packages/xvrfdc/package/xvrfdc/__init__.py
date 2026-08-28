@@ -27,6 +27,7 @@ real applications: ``SetDecimation``, ``SetInterpolation``,
 
 import errno
 import os
+import time
 import warnings
 
 import cffi
@@ -76,6 +77,13 @@ MIXER_MODE_R2R = 4
 CRS_MIX_BYPASS = 1
 
 EVNT_SRC_IMMEDIATE = 0
+
+# Tile FSM states, from xvrfdc.h. A tile that has come up reads STATE_FULL;
+# STATE_OFF means it never started.
+STATE_OFF = 0x00
+STATE_SHUTDOWN = 0x01
+STATE_PLL_LOCK = 0x0C
+STATE_FULL = 0x15
 
 
 def _check(name, *args):
@@ -265,6 +273,31 @@ class VRFdc(pynq.DefaultIP):
     def get_mixer_freq(self, tile_type, tile, block):
         """The block's current NCO frequency in MHz."""
         return self.get_mixer(tile_type, tile, block).Freq
+
+    def startup(self, tile_type, tile, wait=2.0):
+        """Run a tile's power-up FSM from OFF to FULL and wait for it.
+
+        Tiles normally come up on their own when the PDI loads. When one
+        reads STATE_OFF it never started, and nothing reports why -- the
+        registers are readable either way, so a converter that is open and a
+        converter that is running look the same from Python until the state
+        is checked.
+
+        Returns the state reached.
+        """
+        _check("XVRFdc_ControlFSM", self._inst, tile_type, tile,
+               STATE_OFF, STATE_FULL)
+        deadline = time.time() + wait
+        tiles = self.adc_tiles if tile_type == ADC_TILE else self.dac_tiles
+        while True:
+            state = tiles[tile].state
+            if state == STATE_FULL or time.time() > deadline:
+                return state
+            time.sleep(0.05)
+
+    def reset(self, tile_type, tile):
+        """Reset a tile."""
+        _check("XVRFdc_Reset", self._inst, tile_type, tile)
 
     def close(self):
         _lib.XVRFdc_InstanceClose(self._inst)
