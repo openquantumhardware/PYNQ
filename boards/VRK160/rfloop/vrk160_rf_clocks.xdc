@@ -24,7 +24,21 @@ set_clock_uncertainty -setup 0.05 [get_clocks adc3_clk]
 # adc_capture_gate synchronises it; tell the tool not to time the crossing,
 # or it reports the launch clock against the capture clock and produces the
 # large negative slack that this design first shipped with.
-set arm_sync [get_cells -hier -filter {NAME =~ *adc_capture_gate*arm_sync_reg[0]*}]
+#
+# The index is matched with "string first" on a literal, not with the filter's
+# glob: in glob matching "[0]" is a character class that matches the single
+# character 0, so the obvious pattern "arm_sync_reg[0]" silently matches
+# nothing -- which is how this constraint came to be absent from a build that
+# looked like it had one.
+set arm_sync {}
+foreach cell [get_cells -hier -filter {NAME =~ "*adc_capture_gate*arm_sync_reg*"}] {
+    if {[string first {[0]} $cell] >= 0} {
+        lappend arm_sync $cell
+    }
+}
 if {[llength $arm_sync]} {
     set_false_path -to [get_pins -of_objects $arm_sync -filter {REF_PIN_NAME == D}]
+    puts "vrk160_rf_clocks.xdc: arm CDC false_path applied to [llength $arm_sync] cell(s)"
+} else {
+    puts "CRITICAL WARNING: vrk160_rf_clocks.xdc: no arm_sync_reg\[0\] cell matched; the arm CDC is being timed and will not close"
 }
