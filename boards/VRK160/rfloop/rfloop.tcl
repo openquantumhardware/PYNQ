@@ -87,9 +87,34 @@ update_compile_order -fileset sources_1
 # Step 4: The converter.
 #
 # DAC0/ADC3 at 7.86432 GSps from a 491.52 MHz reference with the internal
-# PLL, interpolation and decimation by 2, 16-bit data. This is AMD's ftloop
-# configuration for VRK160 verbatim; every parameter name below exists
-# unchanged in IP v1.2 and v1.3.
+# PLL, interpolation and decimation by 2, 16-bit data -- AMD's ftloop
+# configuration for VRK160. Every parameter name exists unchanged in IP v1.2
+# and v1.3.
+#
+# The DAC mixer settings deliberately differ from ftloop's. ftloop makes its
+# tone with an iFFT and leaves the mixer out of the path: it sets real data
+# out with the mixer off, and PG443 is explicit that "when real data is
+# output the mixer is bypassed". This design has no tone generator in the PL
+# at all -- the NCO is the generator -- so the DAC takes I/Q in and the fine
+# mixer converts to real:
+#   DAC_Data_Type00  1  I/Q input
+#   DAC_Mixer_Type00 2  fine (XVRFDC_MIXER_TYPE_FINE)
+#   DAC_Mixer_Mode00 1  the only value the IP accepts here, and since a
+#                       DAC's analog output is real it is I/Q to real.
+#                       NOTE the IP's parameter encoding is NOT the driver's:
+#                       XVRFDC_MIXER_MODE_C2R is 2 and XVRFDC_MIXER_MODE_C2C
+#                       is 1, but the IP rejects 2 outright --
+#                       "Valid values are - 1". Do not assume the two
+#                       numberings agree anywhere else either.
+#   DAC_Slice01      1  I/Q needs the converter pair, not one converter:
+#                       "Converter 1 must be enabled to output I/Q data"
+# DAC_Coarse_Mixer_Freq00 is gone: with the fine mixer the IP disables that
+# parameter, and setting it only produced
+#   [IP_Flow 19-3374] An attempt to modify the value of disabled parameter
+# It was inherited from ftloop and never applied there either.
+# With ftloop's values XVRFdc_SetMixerSettings returns success and the
+# frequency reads back 0.0, because there is no mixer in the datapath to
+# program.
 set vrfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:vrf_data_converter vrf_data_converter_0]
 set_property -dict [list \
     CONFIG.ADC3_Outclk_Freq         {491.520} \
@@ -111,15 +136,15 @@ set_property -dict [list \
     CONFIG.DAC0_PLL_Enable          {true} \
     CONFIG.DAC0_Refclk_Freq         {491.520} \
     CONFIG.DAC0_Sampling_Rate       {7.864320} \
-    CONFIG.DAC_Coarse_Mixer_Freq00  {2} \
-    CONFIG.DAC_Data_Type00          {0} \
+    CONFIG.DAC_Data_Type00          {1} \
     CONFIG.DAC_Data_Width00         {16} \
     CONFIG.DAC_Interpolation_Mode00 {2} \
-    CONFIG.DAC_Mixer_Mode00         {0} \
-    CONFIG.DAC_Mixer_Type00         {1} \
+    CONFIG.DAC_Mixer_Mode00         {1} \
+    CONFIG.DAC_Mixer_Type00         {2} \
     CONFIG.DAC_Mode00               {1} \
     CONFIG.DAC_RTS                  {false} \
     CONFIG.DAC_Slice00_Enable       {true} \
+    CONFIG.DAC_Slice01_Enable       {true} \
     CONFIG.DAC_Slice10_Enable       {false} \
     CONFIG.DAC_Slice20_Enable       {false} \
     CONFIG.DAC_Slice30_Enable       {false} \
