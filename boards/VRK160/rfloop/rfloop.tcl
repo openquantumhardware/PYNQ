@@ -145,6 +145,7 @@ set_property -dict [list \
     CONFIG.DAC_RTS                  {false} \
     CONFIG.DAC_Slice00_Enable       {true} \
     CONFIG.DAC_Slice01_Enable       {true} \
+    CONFIG.DAC_NCO_Freq00           {0.1} \
     CONFIG.DAC_Slice10_Enable       {false} \
     CONFIG.DAC_Slice20_Enable       {false} \
     CONFIG.DAC_Slice30_Enable       {false} \
