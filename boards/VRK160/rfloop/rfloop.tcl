@@ -92,29 +92,40 @@ update_compile_order -fileset sources_1
 # and v1.3.
 #
 # The DAC mixer settings deliberately differ from ftloop's. ftloop makes its
-# tone with an iFFT and leaves the mixer out of the path: it sets real data
-# out with the mixer off, and PG443 is explicit that "when real data is
-# output the mixer is bypassed". This design has no tone generator in the PL
-# at all -- the NCO is the generator -- so the DAC takes I/Q in and the fine
-# mixer converts to real:
-#   DAC_Data_Type00  1  I/Q input
-#   DAC_Mixer_Type00 2  fine (XVRFDC_MIXER_TYPE_FINE)
-#   DAC_Mixer_Mode00 1  the only value the IP accepts here, and since a
-#                       DAC's analog output is real it is I/Q to real.
-#                       NOTE the IP's parameter encoding is NOT the driver's:
-#                       XVRFDC_MIXER_MODE_C2R is 2 and XVRFDC_MIXER_MODE_C2C
-#                       is 1, but the IP rejects 2 outright --
-#                       "Valid values are - 1". Do not assume the two
-#                       numberings agree anywhere else either.
-#   DAC_Slice01      1  I/Q needs the converter pair, not one converter:
-#                       "Converter 1 must be enabled to output I/Q data"
+# tone with an iFFT and leaves the mixer out of the path. This design has no
+# tone generator in the PL at all -- the converter's own NCO is the
+# generator -- so the fine mixer has to be in the datapath and its frequency
+# has to be programmable.
+#
+# The combination below was found by enumerating the IP's valid ones rather
+# than reasoning about them, because two things are counter-intuitive:
+#
+# DAC_Data_Type is the format of the **analog output**, not of the digital
+# input. Setting it to I/Q asks the DAC to drive I and Q on two separate
+# analog outputs, which is why the IP then demands "Converter 1 must be
+# enabled to output I/Q data". We want one real RF output, so it stays 0 --
+# the digital input is still I/Q, and the fine mixer converts.
+#
+# And the IP's encodings are not the driver's: XVRFDC_MIXER_MODE_C2R is 2,
+# but here mode 0 is the one that pairs with real output and a fine mixer.
+#
+# Valid (Data_Type, Mixer_Type, Mixer_Mode) triples, and whether the NCO
+# frequency is settable -- which is what tells you the fine mixer is really
+# in the path:
+#
+#   0, 1, 0  -> NCO settable
+#   0, 1, 2  -> NCO disabled
+#   0, 2, 0  -> NCO settable   <- used here
+#   1, 1, 1  -> NCO settable   } both need the converter pair, and the DAC
+#   1, 2, 1  -> NCO settable   } tile does not leave reset in that mode
+#
+# DAC_NCO_Freq00 is in **GHz**: 0.1 is 100 MHz. The IP only mentions the
+# unit when the value is rejected, as "out of the range (-16.0,16.0)".
+#
 # DAC_Coarse_Mixer_Freq00 is gone: with the fine mixer the IP disables that
-# parameter, and setting it only produced
+# parameter and setting it only produced
 #   [IP_Flow 19-3374] An attempt to modify the value of disabled parameter
 # It was inherited from ftloop and never applied there either.
-# With ftloop's values XVRFdc_SetMixerSettings returns success and the
-# frequency reads back 0.0, because there is no mixer in the datapath to
-# program.
 set vrfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:vrf_data_converter vrf_data_converter_0]
 set_property -dict [list \
     CONFIG.ADC3_Outclk_Freq         {491.520} \
@@ -136,15 +147,14 @@ set_property -dict [list \
     CONFIG.DAC0_PLL_Enable          {true} \
     CONFIG.DAC0_Refclk_Freq         {491.520} \
     CONFIG.DAC0_Sampling_Rate       {7.864320} \
-    CONFIG.DAC_Data_Type00          {1} \
+    CONFIG.DAC_Data_Type00          {0} \
     CONFIG.DAC_Data_Width00         {16} \
     CONFIG.DAC_Interpolation_Mode00 {2} \
-    CONFIG.DAC_Mixer_Mode00         {1} \
+    CONFIG.DAC_Mixer_Mode00         {0} \
     CONFIG.DAC_Mixer_Type00         {2} \
     CONFIG.DAC_Mode00               {1} \
     CONFIG.DAC_RTS                  {false} \
     CONFIG.DAC_Slice00_Enable       {true} \
-    CONFIG.DAC_Slice01_Enable       {true} \
     CONFIG.DAC_NCO_Freq00           {0.1} \
     CONFIG.DAC_Slice10_Enable       {false} \
     CONFIG.DAC_Slice20_Enable       {false} \
