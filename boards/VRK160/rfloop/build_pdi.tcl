@@ -58,6 +58,20 @@ if {[file exists $golden_ncr]} {
     puts "         Overlay will use its own NoC solution (may differ from boot PDI)"
 }
 
+# Workaround for CR-1223133, taken from AMD's own ftloop reference design
+# for this board. The RF data converter instantiates one PVT_SAS per tile --
+# eight here, since the IP lays down all four ADC and all four DAC tiles
+# whatever the per-slice enables say -- and the device model reserves those
+# sites, so place_design refuses before it starts:
+#
+#   ERROR: [DRC UTLZ-1] Resource utilization: PVT_SAS over-utilized ...
+#   This design requires 8 of such cell types but no compatible site is
+#   available in the target device
+#
+# Set in this session rather than in the run: Vivado copies non-default
+# set_param values into the script it generates for launch_runs.
+set_param device.unreserve_licensed_sites true
+
 set num_jobs 4
 if {[info exists ::env(VIVADO_JOBS)]} {
     set num_jobs $::env(VIVADO_JOBS)
