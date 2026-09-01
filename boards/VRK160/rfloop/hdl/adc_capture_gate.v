@@ -10,9 +10,24 @@
 // pulse and then closes, asserting tlast on the last one so the DMA's S2MM
 // transfer terminates cleanly.
 //
-// DEPTH must not exceed the downstream FIFO depth. While the gate is open
-// the FIFO fills far faster than the DMA drains it, so anything longer is
-// silently lost -- the counter is what bounds the burst, not back-pressure.
+// DEPTH must be comfortably SMALLER than the downstream FIFO, not merely no
+// larger. The gate feeds at 491.52 M beats/s and the DMA drains at about
+// 50 M, so the FIFO fills at 441 M/s: a burst the size of the FIFO reaches
+// 90% occupancy, the gate then stalls on tready, and the ADC -- which cannot
+// be back-pressured -- keeps producing data that is dropped. The burst that
+// lands in the buffer is no longer a contiguous window in time, which makes
+// an FFT of it meaningless.
+//
+// It also stops being deterministic. Measured on hardware with DEPTH 8192
+// and a FIFO of 8192: a read of 6824 beats completed on alternate attempts
+// and timed out on the others, the surplus from a failed capture feeding the
+// next one. Nothing downstream reports this -- the DMA completes normally
+// and returns data that is simply old.
+//
+// At DEPTH 4096 the FIFO peaks near 3700 of 8192, the gate never stalls, and
+// the burst is contiguous. Whatever reads it must request exactly DEPTH
+// beats: asking for fewer leaves the remainder in the FIFO, and the next
+// capture reads that instead of new data.
 //
 // Two things here exist because the first version of this module missed
 // timing by 3.9 ns at 491.52 MHz, every failing path starting at the
@@ -31,7 +46,7 @@
 
 module adc_capture_gate #(
     parameter integer TDATA_WIDTH = 256,
-    parameter integer DEPTH       = 8192,
+    parameter integer DEPTH       = 4096,
     parameter integer CNT_WIDTH   = 14      // must hold DEPTH
 ) (
     input  wire                   aclk,
