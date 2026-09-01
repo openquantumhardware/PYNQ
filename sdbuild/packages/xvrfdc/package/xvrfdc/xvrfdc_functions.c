@@ -99,3 +99,42 @@ u32  XVRFdc_GetMixerSettings(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block
  * directly. Must be called once before any device is opened. */
 int  xvrfdc_metal_init(void);
 void xvrfdc_metal_finish(void);
+
+/* Interrupt status.
+ *
+ * This is the only way to ask the hardware whether the converter is actually
+ * being fed. A tile can be FULL, its FIFO enabled and its word counts right,
+ * and still emit nothing because the PL never presents data: that shows up
+ * here as a FIFO flag and nowhere else.
+ *
+ * GetIntrStatusAll is used in preference to GetIntrStatus because the latter
+ * takes an XVRFdc_IntrSource enum, whose numbering would have to be mirrored
+ * by hand -- the kind of unchecked duplication that has already cost this
+ * package two silent bugs. The struct is plain u32 throughout, so its layout
+ * is the same packed or not; the Makefile measures it anyway.
+ */
+typedef struct {
+    u32 AxiTimeout;
+    u32 Common;
+    u32 ADC_OverVoltage;
+    u32 ADC_OverRange;
+    u32 ADC_FabricObsCh;
+    u32 ADC_DatapathOverflow;
+    u32 ADC_FIFOOverflow;
+    u32 ADC_CMOverVoltage;
+    u32 ADC_CMUnderVoltage;
+    u32 ADC_CalibOverflow[2];
+    u32 DAC_DatapathOverflow[2];
+    u32 DAC_FIFOOverflow;
+    u32 DAC_PAProtect;
+} XVRFdc_IntrDataAll;
+
+u32  XVRFdc_GetIntrStatusAll(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id,
+                             XVRFdc_IntrDataAll *DataAll);
+u32  XVRFdc_IntrClrAll(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id);
+
+/* Applying a queued setting. With EventSource IMMEDIATE the mixer updates on
+ * write, but with TILE or SLICE it does not until the event fires -- which is
+ * how the NCO can read back correctly from its register and still not be the
+ * frequency the datapath is using. XVRFDC_UPDATE_EVENT_NCO is 6. */
+u32  XVRFdc_UpdateEvent(void *InstancePtr, u32 Type, u32 Tile_Id, u32 Block_Id, u32 Event);

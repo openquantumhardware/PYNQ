@@ -52,11 +52,28 @@ _lib = _ffi.dlopen(os.path.join(_THIS_DIR, "libvrfdc.so"))
 # why it cannot simply be declared as a struct.
 try:
     from ._size import _SIZE as _INSTANCE_SIZE
-except ImportError:
+    from ._size import _MIXER_SIZE, _INTR_ALL_SIZE
+except ImportError as exc:
     raise ImportError(
-        "xvrfdc/_size.py is missing. It carries sizeof(XVRFdc) as measured on "
-        "the target; run 'make' in the package directory before installing."
+        "xvrfdc/_size.py is missing or predates the struct-size checks. It "
+        "carries the target's own sizeof() for every struct this package "
+        "declares by hand; run 'make' in the package directory before "
+        "installing. (%s)" % exc
     ) from None
+
+# A hand-written struct declaration that is the wrong size does not fail: it
+# reads and writes at the wrong offsets. XVRFdc_Mixer_Settings came out 40
+# bytes instead of 33 once and programmed the NCO from whatever happened to
+# land at the shifted offset, with no error anywhere. Check rather than trust.
+for _name, _measured in (("XVRFdc_Mixer_Settings", _MIXER_SIZE),
+                         ("XVRFdc_IntrDataAll", _INTR_ALL_SIZE)):
+    _declared = _ffi.sizeof(_name)
+    if _declared != _measured:
+        raise ImportError(
+            "%s is declared as %d bytes in xvrfdc_functions.c but the driver "
+            "on this target compiles it to %d. Every field past the first "
+            "mismatch would be read from the wrong offset." %
+            (_name, _declared, _measured))
 
 ADC_TILE = 0
 DAC_TILE = 1
@@ -76,7 +93,20 @@ MIXER_MODE_R2R = 4
 
 CRS_MIX_BYPASS = 1
 
+# Fine mixer scale. Note this is NOT the xrfdc numbering, where 0 is AUTO:
+# vrfdc has no AUTO and 0 means 0.7, so a constant copied across from an
+# RFSoC port silently selects a different gain.
+MIXER_SCALE_0P7 = 0
+MIXER_SCALE_1P0 = 1
+
 EVNT_SRC_IMMEDIATE = 0
+
+# Update events, from xvrfdc.h. Needed when EventSource is not IMMEDIATE:
+# the setting is written but does not reach the datapath until the event
+# fires, so the NCO can read back correctly and still not be in use.
+UPDATE_EVENT_TILE = 0
+UPDATE_EVENT_SLICE = 1
+UPDATE_EVENT_NCO = 6
 
 # Tile FSM states, from xvrfdc.h. A tile that has come up reads STATE_FULL;
 # STATE_OFF means it never started.
@@ -281,6 +311,17 @@ class VRFdc(pynq.DefaultIP):
         cfg.EventSource = EVNT_SRC_IMMEDIATE
         if nyquist is not None:
             cfg.NyquistZone = int(nyquist)
+        if cfg.MixerType == MIXER_TYPE_FINE:
+            # Bypass the coarse stage, do not leave it off. The read part of
+            # this read-modify-write carries whatever the IP configured, and
+            # the IP leaves CoarseMixFreq at XVRFDC_CRS_MIX_OFF (0) -- which
+            # is not the same as XVRFDC_CRS_MIX_BYPASS (1). Xilinx's own
+            # RFSoC-PYNQ reference sets COARSE_MIX_BYPASS for exactly this
+            # configuration (fine mixer, C2R, constant input, loopback):
+            # boards/*/packages/rfsystem/package/rfsystem/hierarchies.py.
+            cfg.CoarseMixFreq = CRS_MIX_BYPASS
+            # 1.0 rather than the IP's 0.7, again matching the reference.
+            cfg.FineMixerScale = MIXER_SCALE_1P0
         _check("XVRFdc_SetMixerSettings", self._inst, tile_type, tile, block, cfg)
         return cfg
 
@@ -341,6 +382,49 @@ class VRFdc(pynq.DefaultIP):
         out = _ffi.new("u32*")
         _check("XVRFdc_GetFabClkOutDiv", self._inst, tile_type, tile, out)
         return out[0]
+
+    def intr_status(self, tile_type, tile, block=0):
+        """Every interrupt flag for a block, as a dict.
+
+        This is the only way to ask whether the converter is actually being
+        fed. A tile can be FULL, its FIFO enabled and its word counts right,
+        and still emit nothing because the PL never presents data -- that
+        shows up as a FIFO flag here and nowhere else.
+        """
+        d = _ffi.new("XVRFdc_IntrDataAll *")
+        _check("XVRFdc_GetIntrStatusAll", self._inst, tile_type, tile, block, d)
+        out = {}
+        for name in ("AxiTimeout", "Common", "ADC_OverVoltage", "ADC_OverRange",
+                     "ADC_FabricObsCh", "ADC_DatapathOverflow",
+                     "ADC_FIFOOverflow", "ADC_CMOverVoltage",
+                     "ADC_CMUnderVoltage", "DAC_FIFOOverflow", "DAC_PAProtect"):
+            out[name] = getattr(d, name)
+        for name in ("ADC_CalibOverflow", "DAC_DatapathOverflow"):
+            out[name] = tuple(getattr(d, name))
+        return out
+
+    def intr_clear(self, tile_type, tile, block=0):
+        """Clear a block's interrupt flags.
+
+        They are sticky, so a flag read after the fact says only that the
+        condition happened at some point -- clear, exercise, then read again
+        to learn whether it is still happening.
+        """
+        _check("XVRFdc_IntrClrAll", self._inst, tile_type, tile, block)
+
+    def update_event(self, tile_type, tile, block=0, event=UPDATE_EVENT_NCO):
+        """Make a queued setting take effect."""
+        _check("XVRFdc_UpdateEvent", self._inst, tile_type, tile, block, event)
+
+    def startup_parent_group(self, tile_type, tile):
+        """Bring up the whole clock-distribution group a tile belongs to.
+
+        ControlFSM restarts one tile. Where tiles share a distributed clock,
+        that is not enough and the restart times out waiting for IP ready --
+        which is what a tile left in STATE_OFF after a PDI redownload looks
+        like. AMD's clock example brings tiles up this way.
+        """
+        _check("XVRFdc_StartUpParentGroup", self._inst, tile_type, tile)
 
     def shutdown(self, tile_type, tile):
         """Shut a tile down.
