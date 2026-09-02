@@ -1,0 +1,14 @@
+# Deliberately empty for now.
+#
+# sgloop.tcl already calls add_files for hdl/*.v and for its own constraints,
+# and it is validated hardware. Listing the same files here as well makes
+# Vivado warn about duplicate adds on every build.
+#
+# The cost is that Hog does not track these sources, so its "uncommitted
+# files" check and changelog do not cover them. That is acceptable while the
+# point is to prove the flow; migrating the file lists out of sgloop.tcl and
+# into here is the natural follow-up, and it is what buys the traceability
+# Hog exists for.
+#
+# sgloop/hdl/sg_desc_src.v
+# sgloop/hdl/adc_capture_gate.v

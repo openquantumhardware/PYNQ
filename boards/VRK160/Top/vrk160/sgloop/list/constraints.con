@@ -1,0 +1,9 @@
+# Only the constraint golden_ref.tcl can no longer add for us.
+#
+# vrk160_pl_io.xdc lives inside golden_ref.tcl's create_project guard, and
+# that guard does not fire under Hog. It places the push-button pins, whose
+# bank silicon is shared with LPDDR5, so leaving it out is not cosmetic.
+#
+# vrk160_rf_clocks.xdc is added by sgloop.tcl itself and is deliberately not
+# listed here -- see list/src.src for why.
+golden/vrk160_pl_io.xdc
