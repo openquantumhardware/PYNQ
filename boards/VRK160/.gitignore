@@ -1,0 +1,39 @@
+# Build outputs. Sources are tracked; everything a build regenerates is not.
+#
+# *.pdi, *.hwh and *.xsa are already ignored repository-wide.
+
+# Device tree: sdtgen's scratch tree and the two files mkdtbo.py makes from it
+dt_*/
+*.dtbo
+*.overlay.dts
+
+# Vivado
+*.jou
+*.log
+*.str
+*.ltx
+*.backup.jou
+*.backup.log
+.Xil/
+.crashReporter/
+NA/
+hd_visual/
+*_error.dcp
+.*.error.rst
+
+# Hog
+Projects/
+bin/
+.repo.yaml
+
+# Golden implementation outputs (build with `make -C golden`)
+golden/golden/
+golden/golden_bkp/
+golden/golden_noc.ncr
+golden/golden_routed.dcp
+
+# Per-overlay Vivado project directories, named after the overlay
+base/base/
+rfloop/rfloop/
+sgloop/sgloop/
+__pycache__/

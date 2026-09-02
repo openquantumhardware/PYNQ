@@ -7,6 +7,10 @@ scratch.
 
 > New to Versal? [§12 Glossary](#13-glossary) explains every acronym used
 > here — PLM, PDI, NoC, NMU/NSU, CCI and the rest — grouped by domain.
+>
+> Want to *build* something on this board rather than understand the port?
+> Go straight to **[BUILDING_OVERLAYS.md](BUILDING_OVERLAYS.md)** — the full
+> path from an empty directory to a PDI the board loads.
 
 Status: **validated on hardware.** The board boots this port's own image to a
 PYNQ Linux login, exposes all 16 GB of LPDDR5, loads the `base` overlay at
@@ -482,6 +486,9 @@ boards/VRK160/
 │   ├── build_user_overlay.tcl
 │   ├── base.py           # PYNQ BaseOverlay driver (leds/buttons/switches/dma)
 │   └── __init__.py
+├── rfloop/               # RF loopback overlay: PL DDS -> DAC0 -> XM855 -> ADC3
+├── sgloop/               # the same loop driven by QICK's axis_signal_gen_v6
+├── Top/vrk160/           # Hog projects for rfloop and sgloop
 ├── edf_bsp/board.dtsi    # CMA pool + zocl node, appended to the device tree
 ├── notebooks/            # copied into the image's Jupyter tree
 └── selftest.json         # test manifest for sdbuild/packages/selftest
@@ -1490,45 +1497,37 @@ requests `1.1`.
 
 ## 12. Adding another overlay
 
-The board directory is set up so a second overlay — the planned `qick` design
-carrying the ADC/DAC handling — can share the golden, and therefore the same
-`BOOT.BIN`, with `base`.
+The board directory is set up so a second overlay can share the golden — and
+therefore the same `BOOT.BIN` — with `base`. Two already do: `rfloop` and
+`sgloop`, both RF loopback designs.
 
-Create `boards/VRK160/qick/` alongside `base/`, copying `Makefile` and
-`build_pdi.tcl` unchanged (both are overlay-agnostic apart from the
-`overlay_name`/`design_name` variables at the top). Then write `qick.tcl`
-following `base.tcl`'s shape:
+**The full procedure is [BUILDING_OVERLAYS.md](BUILDING_OVERLAYS.md)**: the
+directory layout, the shape of `<name>.tcl` step by step, the address and
+clock rules the golden imposes, the RF converter's traps, the Hog flow, how
+to get the result onto the board, and a symptom-to-cause table for the
+failures that do not say what they are.
 
-1. `set design_name "qick"`, then `source ../golden/golden_ref.tcl`.
-2. Delete the golden's tie-offs (`pl_tieoff_m00axi`, `pl_tieoff_dma0/1`,
-   `pl_tieoff_irq`) and the IRQ nets, exactly as `base.tcl` does.
-3. Hang a SmartConnect off `axi_noc_ps/M00_AXI` and fan out to your IP.
-4. Route bulk data to DDR through `axi_noc_pl/S00_AXI` / `S01_AXI`, which
-   reach the memory controller over the inter-NoC link.
-5. Lay out `pl_segments` inside the reserved window, **ending exactly at the
-   top** — keep the `pl_aperture_anchor` block if your peripherals do not
-   reach `0x…0FFF_0000` on their own.
+The constraints that decide whether your overlay is feasible at all:
 
-Both overlays are then discovered automatically: any directory within two
-levels of the board directory holding a `.pdi` becomes an overlay in the
-image, so `qick/qick.pdi` and its `.hwh`/`.py` are installed under
-`pynq.overlays.qick`.
-
-Things worth knowing before starting:
-
-* `BITSTREAM_VRK160` in `VRK160.spec` names the overlay loaded **at boot**.
-  It can stay `base/base.pdi`; `qick.pdi` is then loaded on demand from
-  Python. Only one overlay is the boot default.
-* The golden gives an overlay four PL clocks (`pl0..pl3_ref_clk`) with a
-  `proc_sys_reset` on each. `base` uses only `pl0`; a QICK design needing
-  separate converter and fabric clocks has the other three available.
-* All 16 `pl_ps_irq` lines are enabled in the golden. `base` uses 0, 1, 8, 9
-  and 10 and ties the rest to zero — retie whatever you do not drive.
-* All 16 GB of LPDDR5 is mapped ([§8](#8-address-map)), and `axi_noc_pl`
-    already has a direct inter-NoC link to each of the four controllers -- so
-    a QICK overlay moving large sample buffers has the bandwidth without a
-    golden change. What it *does* need is more PL master ports on
-    `axi_noc_pl`, which is a golden change and a full rebuild.
+* **The golden is a contract, not a template.** Editing it changes
+  `golden_noc.ncr`, which invalidates every other overlay *and* `BOOT.BIN`.
+* **`BITSTREAM_VRK160` in `VRK160.spec` names the overlay loaded at boot.**
+  It can stay `base/base.pdi`; yours is then loaded on demand from Python.
+  Only one overlay is the boot default.
+* **Four PL clocks** (`pl0..pl3_ref_clk`), each with a `proc_sys_reset`.
+  `base` uses only `pl0`; a design needing separate converter and fabric
+  clocks has the other three, though both RF overlays instead derive their
+  fast domain from a converter output clock through a `clkx5_wiz`.
+* **All 16 `pl_ps_irq` lines** are enabled in the golden. Retie whatever you
+  do not drive.
+* **All 16 GB of LPDDR5** is mapped ([§8](#8-address-map)), and `axi_noc_pl`
+  already has a direct inter-NoC link to each of the four controllers — so an
+  overlay moving large sample buffers has the bandwidth without a golden
+  change. What it *does* need is more PL master ports on `axi_noc_pl`, which
+  is a golden change and a full rebuild.
+* **Versal RF devices do not support PL Reload**: one PDI download per boot.
+  A driver must be able to attach to an already-loaded overlay instead of
+  downloading again.
 
 ---
 
