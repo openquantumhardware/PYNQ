@@ -98,51 +98,71 @@ update_compile_order -fileset sources_1
 # configuration for VRK160. Every parameter name exists unchanged in IP v1.2
 # and v1.3.
 #
-# The DAC mixer settings deliberately differ from ftloop's. ftloop makes its
-# tone with an iFFT and leaves the mixer out of the path. This design has no
-# tone generator in the PL at all -- the converter's own NCO is the
-# generator -- so the fine mixer has to be in the datapath and its frequency
-# has to be programmable.
+# The DAC mixer settings match the IP's own generated example project
+# (vrf_data_converter_0_ex) exactly on the active path. That was established
+# by diffing its .xci against this design: on DAC00 + ADC30 the only
+# parameters that differed were the three set below.
 #
-# The combination below was found by enumerating the IP's valid ones rather
-# than reasoning about them, because two things are counter-intuitive:
+# The IP's coarse-mixer enum is NOT the driver's, and reading one with the
+# other cost a week. From component.xml, choice_pairs_3f1ccca9:
+#
+#     value 0 = Fs/2      value 1 = Fs/4
+#     value 2 = -Fs/4     value 3 = 0
+#
+# whereas XVRFDC_CRS_MIX_* in xvrfdc.h is OFF=0, BYPASS=1, FS_DIV_2=2,
+# FS_DIV_4=3, MINUS_FS_DIV_4=4, ... Same concept, disjoint encodings. The GUI
+# labels are "Frequency DUC0" for DAC_Coarse_Mixer_Freq00 and "Frequency DDC0"
+# for ADC_Coarse_Mixer_Freq30.
+#
+# So: DAC DUC0 at -Fs/4 (value 2) and ADC DDC0 at Fs/4 (value 1). The two
+# shifts cancel, which makes the loopback transparent -- a baseband tone from
+# the PL DDS should come back at baseband, with no folding arithmetic needed
+# to read the capture. That is the point of the example's choice.
+#
+# Leaving DAC_Coarse_Mixer_Freq00 unset is not neutral: the parameter defaults
+# to 0, which in this enum is Fs/2, not "off". This design had it unset.
 #
 # DAC_Data_Type is the format of the **analog output**, not of the digital
 # input. Setting it to I/Q asks the DAC to drive I and Q on two separate
 # analog outputs, which is why the IP then demands "Converter 1 must be
 # enabled to output I/Q data". We want one real RF output, so it stays 0 --
-# the digital input is still I/Q, and the fine mixer converts.
+# the digital input is still I/Q, and the mixer converts.
 #
-# And the IP's encodings are not the driver's: XVRFDC_MIXER_MODE_C2R is 2,
-# but here mode 0 is the one that pairs with real output and a fine mixer.
+# Valid (Data_Type, Mixer_Type, Mixer_Mode) triples, found by enumerating the
+# IP's rather than reasoning about them:
 #
-# Valid (Data_Type, Mixer_Type, Mixer_Mode) triples, and whether the NCO
-# frequency is settable:
-#
-#   0, 1, 0  -> NCO settable   <- used here, as COARSE
+#   0, 1, 0  -> NCO settable   <- used here (low power, as the example does)
 #   0, 1, 2  -> NCO disabled
-#   0, 2, 0  -> NCO settable   (fine; see below)
+#   0, 2, 0  -> NCO settable   (fine)
 #   1, 1, 1  -> NCO settable   } both need the converter pair, and the DAC
 #   1, 2, 1  -> NCO settable   } tile does not leave reset in that mode
 #
-# Mixer_Type 1 is coarse and 2 is fine, which is the opposite of what the
-# settable-NCO column suggests: the IP leaves DAC_NCO_Freq00 enabled for the
-# coarse type too, where it has no effect.
+# Mixer_Type 1 is the low-power mixer and 2 is the fine one. PG443 p.151:
+# the first-stage low-power mixer supports +/-Fs/4 and +/-Fs/2 only, and is
+# independent from the second-stage coarse mixer, which works on an Fs/8 grid
+# and hops coherently across all eight of its frequencies.
 #
-# This design used the fine mixer (type 2) with DAC_NCO_Freq00 in GHz, and
-# the NCO provably does not modulate on this part -- FCW scaling linearly
-# with the requested frequency, phase accumulator enabled, mixer mode
-# register 0xC03 (C2R, I branch, COS_MINSIN), and an output that does not
-# follow any of it. It now uses coarse at -Fs/4, which is what AMD's own
-# generated example project for this IP uses, and which shifts by a fixed
-# 1966.08 MHz. No vendor example configures the mixer at all, in either
-# mode; that is why this is worth pinning down empirically.
+# The low-power baseline above was validated on hardware (build 13): a PL DDS
+# tone comes back through DAC -> XM855 -> ADC at the requested frequency to
+# within 0.04 MHz across 200 MHz - 3.5 GHz, 85-88 dB over the floor, a single
+# clean tone. The two -Fs/4 and Fs/4 shifts cancel, so the capture reads the
+# DDS frequency directly. Artifacts kept as rfloop_run13.{pdi,hwh,dtbo}.
 #
-# Measured with a working capture: with coarse at -Fs/4 configured, a 200 MHz
-# baseband tone from the PL DDS came out at 200.04 MHz, not at 1766. The
-# coarse mixer does not shift either. Back on fine here to re-measure the NCO
-# the same way, since the earlier NCO result came from a broken capture.
-
+# This build changes exactly one thing from that baseline: Mixer_Type00 goes
+# from 1 (low power) to 2 (fine), to get an NCO that tunes to an arbitrary
+# frequency rather than the four values low power allows. Coarse_Mixer_Freq00
+# stays at 2.
+#
+# An earlier fine-mixer attempt produced a three-line comb at 1766.04 /
+# 1274.52 / 783.00 MHz -- spacing exactly Fs/8 = 491.52 MHz -- static against
+# eight NCO settings from 0 to 900 MHz and visible as a beat on a scope. That
+# build had Coarse_Mixer_Freq00 sitting at its default of 0, which in the IP's
+# enum is Fs/2, not off; whether that caused the comb is exactly what this
+# build tests.
+#
+# Open question to settle from the generated .hwh, before touching hardware:
+# whether Coarse_Mixer_Freq00 survives with Mixer_Type00 = 2 at all. Its
+# enablement in component.xml is resolve="generated", so Vivado may drop it.
 set vrfdc [create_bd_cell -type ip -vlnv xilinx.com:ip:vrf_data_converter vrf_data_converter_0]
 set_property -dict [list \
     CONFIG.ADC3_Outclk_Freq         {491.520} \
@@ -167,9 +187,10 @@ set_property -dict [list \
     CONFIG.DAC_Data_Type00          {0} \
     CONFIG.DAC_Data_Width00         {16} \
     CONFIG.DAC_Interpolation_Mode00 {2} \
+    CONFIG.DAC_Coarse_Mixer_Freq00  {2} \
     CONFIG.DAC_Mixer_Mode00         {0} \
-    CONFIG.DAC_Mixer_Type00         {2} \
-    CONFIG.DAC_NCO_Freq00           {0.1} \
+    CONFIG.DAC_Mixer_Type00         {1} \
+    CONFIG.DAC_NCO_Freq00           {0.0} \
     CONFIG.DAC_Mode00               {1} \
     CONFIG.DAC_RTS                  {false} \
     CONFIG.DAC_Slice00_Enable       {true} \
@@ -181,8 +202,14 @@ set_property -dict [list \
 # Step 5: AXIS clock domain.
 #
 # clk_dac0 is an output of the converter at 491.52 MHz. It is regenerated
-# through a clocking wizard onto a BUFG, exactly as the ftloop reference
-# does, and that is the clock for everything on the converter side.
+# through a clocking wizard onto a BUFG, as the ftloop reference does, and
+# that is the clock for everything on the converter side.
+#
+# Feeding the fabric from clk_adc3 instead was tried (build 15) on the theory
+# that the tile supplying the clock could not restart itself. It made no
+# difference -- DAC0 still dropped to OFF and ADC3 still survived -- and the
+# reason turned out to be elsewhere: AMD's RF known issues state that Versal
+# RF devices do not support PL Reload at all. Left on clk_dac0.
 set clk_rf [create_bd_cell -type ip -vlnv xilinx.com:ip:clkx5_wiz clk_rf_wiz]
 set_property -dict [list \
     CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {491.520,100.000,100.000,100.000,100.000,100.000,100.000} \
