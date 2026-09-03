@@ -1038,6 +1038,13 @@ why it went unnoticed.
 | DMA | 1024-word loopback PL↔DDR passes, data intact |
 | BRAM | read/write through `0xA400_0000` passes |
 | Ethernet | `eth0` up, 1 Gbps, routable |
+| **A clean `make BOARDS=VRK160`** | Ran end to end on 2026-08-27, producing `sdbuild/output/VRK160-4.0.0.img` (8 GB), with the three upstream Python fixes and the PYNQ-Metadata pin already in the tree |
+
+> **That image predates the RF work.** It was written at 17:45 and `rfloop`
+> landed at 18:06, followed by eleven commits to `sdbuild/packages/xvrfdc`.
+> So a card written from it has `base` and a working userspace but no RF
+> stack — which is why `xvrfdc` has been installed on the board by hand since.
+> Rebuild the image before treating it as the reference for anything RF.
 
 ### Verified in tooling only
 
@@ -1052,7 +1059,6 @@ why it went unnoticed.
 
 | Item | Risk |
 | --- | --- |
-| **A clean `make BOARDS=VRK160`** | The validated card was built from an image predating several fixes, with `base.pdi`, `base.hwh`, `base.py`, the notebooks and three Python packages patched in by hand. The full build has not been run since, so **the image is not yet reproducible from a clean checkout** |
 | `zocl_overlay.dtbo` | AMD's working image ships one; this port does not generate it. `zocl.ko` loads, but XRT behaviour beyond `pynq.allocate()` is untested |
 | `/home/xilinx/pynq` shadowing | A stray source checkout in the home directory shadows the installed package, so `import pynq` fails for the non-root user from their own home |
 | `/dev/dri` permissions | The `xilinx` user could not open the XRT device; only root was tested |
